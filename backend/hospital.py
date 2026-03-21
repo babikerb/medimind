@@ -47,28 +47,29 @@ def seed():
     raw = fetch_hospitals()
     print(f"Total records in CSV: {len(raw)}")
 
-    # Print first record so we can see the actual column names
-    if raw:
-        print("Sample columns:", list(raw[0].keys())[:10])
-
     hospitals = []
     for h in raw:
         # Filter to LA and Orange County only
-        county_raw = h.get("COUNTY", h.get("county", "")).strip()
-        if county_raw not in ("Los Angeles", "Orange"):
+        county_raw = h.get("COUNTY_NAME", "").strip()
+        if county_raw not in ("LOS ANGELES", "ORANGE"):
             continue
 
         # Filter to General Acute Care Hospitals only
-        fac_type = h.get("FACTYPE", h.get("factype", "")).strip()
-        if "General Acute Care" not in fac_type:
+        fac_type = h.get("TYPE_OF_CARE", "").strip()
+        fac_fdr = h.get("FAC_FDR", "").strip()
+        if "GENERAL ACUTE CARE" not in fac_fdr.upper() and "GENERAL ACUTE CARE" not in fac_type.upper():
             continue
 
-        name = h.get("FACNAME", h.get("facname", "")).strip()
+        # Skip closed facilities
+        if h.get("FAC_STATUS_TYPE_CODE", "").strip() != "OPEN":
+            continue
+
+        name = h.get("FACNAME", "").strip()
         if not name:
             continue
 
-        lat = h.get("LATITUDE", h.get("latitude", "")).strip()
-        lon = h.get("LONGTITUDE", h.get("longtitude", h.get("longitude", ""))).strip()
+        lat = h.get("LATITUDE", "").strip()
+        lon = h.get("LONGITUDE", "").strip()
         if not lat or not lon:
             continue
 
@@ -78,7 +79,7 @@ def seed():
         except ValueError:
             continue
 
-        total_beds = h.get("NUMBED", h.get("numbed", "0")).strip()
+        total_beds = h.get("CAPACITY", "0").strip()
         try:
             total_beds = int(float(total_beds))
         except ValueError:
@@ -86,19 +87,23 @@ def seed():
         if total_beds == 0:
             continue
 
-        county = "LA" if county_raw == "Los Angeles" else "Orange"
+        county = "LA" if county_raw == "LOS ANGELES" else "Orange"
+
+        # Check trauma center flags for department inference
+        trauma = h.get("TRAUMA_CTR", "").strip()
+        is_trauma = trauma != ""
 
         hospitals.append({
             "name": name,
-            "address": h.get("FACADDR", h.get("facaddr", "")).strip(),
+            "address": h.get("ADDRESS", "").strip() + ", " + h.get("CITY", "").strip(),
             "latitude": lat,
             "longitude": lon,
             "county": county,
-            "departments": infer_departments(name, fac_type),
+            "departments": infer_departments(name, fac_fdr + " " + ("trauma" if is_trauma else "")),
             "total_beds": total_beds,
             "base_occupancy_rate": 0.75,
             "accepted_insurances": DEFAULT_INSURANCES,
-            "phone": h.get("FACPHONE", h.get("facphone", "")).strip(),
+            "phone": h.get("CONTACT_PHONE_NUMBER", "").strip(),
         })
 
     print(f"Inserting {len(hospitals)} valid hospitals into Supabase...")
