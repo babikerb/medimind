@@ -38,6 +38,15 @@
             "backgroundColor": "#000000"
           }
         }
+      ],
+      "@react-native-community/datetimepicker",
+      [
+        "expo-video",
+        {
+          "playback": {
+            "androidImplementation": "exoplayer"
+          }
+        }
       ]
     ],
     "experiments": {
