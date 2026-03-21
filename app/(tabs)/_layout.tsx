@@ -12,34 +12,34 @@ export default function TabLayout() {
         headerShown: false,
         tabBarButton: HapticTab,
         tabBarActiveTintColor: "#A78BFA",
-        tabBarInactiveTintColor: "#475569",
+        tabBarInactiveTintColor: "#94a3b8",
         tabBarStyle: {
-          position: "absolute",
-          bottom: Platform.OS === "ios" ? 36 : 24,
-          left: 32,
-          right: 32,
-          height: 68,
-          borderRadius: 34,
-          backgroundColor: "rgba(15, 23, 42, 0.75)",
-          borderWidth: 1,
-          borderColor: "rgba(124, 58, 237, 0.25)",
-          overflow: "hidden",
-          elevation: 0,
-          shadowColor: "#7C3AED",
-          shadowOffset: { width: 0, height: 8 },
-          shadowOpacity: 0.25,
-          shadowRadius: 24,
-          paddingBottom: 0,
-          paddingTop: 0,
+          position: "relative",
+          height: Platform.OS === "ios" ? 88 : 68,
+
+          backgroundColor: "#0f172a",
+
+          borderRadius: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+
+          borderTopWidth: 1,
+          borderTopColor: "rgba(124, 58, 237, 0.2)",
+          elevation: 8,
+          shadowColor: "#000",
+          shadowOffset: { width: 0, height: -2 },
+          shadowOpacity: 0.1,
+          shadowRadius: 4,
         },
         tabBarLabelStyle: {
-          fontSize: 9,
+          fontSize: 10,
           fontWeight: "700",
-          letterSpacing: 1.5,
-          marginBottom: 10,
+          letterSpacing: 0.5,
+          marginBottom: Platform.OS === "ios" ? 0 : 10,
         },
         tabBarIconStyle: {
-          marginTop: 10,
+          marginTop: 5,
         },
       }}
     >
@@ -48,7 +48,7 @@ export default function TabLayout() {
         options={{
           title: "HOME",
           tabBarIcon: ({ color }) => (
-            <MaterialIcons name="home" size={24} color={color} />
+            <MaterialIcons name="home" size={26} color={color} />
           ),
         }}
       />
@@ -57,7 +57,7 @@ export default function TabLayout() {
         options={{
           title: "EXPLORE",
           tabBarIcon: ({ color }) => (
-            <MaterialIcons name="search" size={24} color={color} />
+            <MaterialIcons name="search" size={26} color={color} />
           ),
         }}
       />
@@ -66,7 +66,7 @@ export default function TabLayout() {
         options={{
           title: "PROFILE",
           tabBarIcon: ({ color }) => (
-            <MaterialIcons name="person" size={24} color={color} />
+            <MaterialIcons name="person" size={26} color={color} />
           ),
         }}
       />
