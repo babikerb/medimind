@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   Animated,
   Dimensions,
-  FlatList,
   Image,
   Linking,
   PanResponder,
@@ -35,7 +34,7 @@ const SHEET_PEEK = 290; // visible height when collapsed
 const SNAP_EXPANDED = 0;
 const SNAP_COLLAPSED = SHEET_HEIGHT - SHEET_PEEK;
 
-// ── Overpass API ──────────────────────────────────────────────────────────────
+// ── Overpass (free, no key) ───────────────────────────────────────────────────
 const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
 
 // ── Filter categories ─────────────────────────────────────────────────────────
@@ -70,128 +69,218 @@ interface NearbyPlace {
   detailsFetched: boolean;
 }
 
-// ── OSM amenity tag → FilterKey ───────────────────────────────────────────────
+// ── OSM amenity → FilterKey ───────────────────────────────────────────────────
 const OSM_AMENITY_MAP: Record<string, FilterKey> = {
   hospital: "hospital",
   clinic: "clinic",
   doctors: "doctors",
   dentist: "dentist",
   pharmacy: "pharmacy",
-  medical_centre: "clinic",
-  health_post: "clinic",
+  physiotherapist: "clinic",
+  medical_lab: "clinic",
+  urgent_care: "clinic",
+  nursing_home: "clinic",
   health_centre: "clinic",
 };
 
-// ── Build Overpass QL query ───────────────────────────────────────────────────
-function buildOverpassQuery(lat: number, lon: number, radiusM: number): string {
+// ── Build Overpass QL query for medical facilities ────────────────────────────
+function buildOverpassQuery(lat: number, lon: number, r: number): string {
   const amenities = Object.keys(OSM_AMENITY_MAP).join("|");
   return `
-[out:json][timeout:25];
-(
-  node["amenity"~"^(${amenities})$"](around:${radiusM},${lat},${lon});
-  way["amenity"~"^(${amenities})$"](around:${radiusM},${lat},${lon});
-  relation["amenity"~"^(${amenities})$"](around:${radiusM},${lat},${lon});
-);
-out center;
-`.trim();
+    [out:json][timeout:25];
+    (
+      node["amenity"~"${amenities}"](around:${r},${lat},${lon});
+      way["amenity"~"${amenities}"](around:${r},${lat},${lon});
+      relation["amenity"~"${amenities}"](around:${r},${lat},${lon});
+    );
+    out center;
+  `.trim();
 }
 
-// ── Parse a single OSM element into NearbyPlace ───────────────────────────────
-function parseOsmElement(
-  el: any,
-  userLat: number,
-  userLon: number,
-): NearbyPlace | null {
+// ── OSM opening_hours parser ──────────────────────────────────────────────────
+// Handles: "24/7", "Mo-Fr 09:00-17:00", "Mo-Sa 08:00-20:00; Su 10:00-16:00"
+const OSM_DAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+
+function parseOpeningHours(raw: string | undefined): {
+  open_now: boolean | undefined;
+  hours_display: string | undefined;
+} {
+  if (!raw) return { open_now: undefined, hours_display: undefined };
+  const normalized = raw.trim();
+
+  if (normalized === "24/7" || normalized === "Mo-Su 00:00-24:00") {
+    return { open_now: true, hours_display: "Open 24 hours" };
+  }
+
+  // JS: 0=Sun…6=Sat → OSM: 0=Mo…6=Su
+  const jsDay = new Date().getDay();
+  const osmToday = jsDay === 0 ? 6 : jsDay - 1;
+  const now = new Date();
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+
+  const fmt = (h: number, m: number) => {
+    const ampm = h >= 12 ? "PM" : "AM";
+    return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
+  };
+
+  for (const rule of normalized.split(";").map((r) => r.trim())) {
+    // Match optional day part + time range: "Mo-Fr 09:00-17:00" or "09:00-17:00"
+    const m = rule.match(/^([A-Za-z ,\-]+?)?\s*(\d{2}):(\d{2})-(\d{2}):(\d{2})$/);
+    if (!m) continue;
+
+    const dayPart = m[1]?.trim();
+    const [sh, sm, eh, em] = [+m[2], +m[3], +m[4], +m[5]];
+
+    // If no day part, rule applies every day
+    let appliesToday = !dayPart;
+
+    if (dayPart) {
+      for (const segment of dayPart.split(",").map((s) => s.trim())) {
+        const parts = segment.split("-");
+        if (parts.length === 1) {
+          if (OSM_DAYS.indexOf(parts[0]) === osmToday) appliesToday = true;
+        } else {
+          const start = OSM_DAYS.indexOf(parts[0]);
+          const end = OSM_DAYS.indexOf(parts[1]);
+          if (start !== -1 && end !== -1) {
+            if (start <= end ? osmToday >= start && osmToday <= end
+                             : osmToday >= start || osmToday <= end)
+              appliesToday = true;
+          }
+        }
+      }
+    }
+
+    if (appliesToday) {
+      const startMins = sh * 60 + sm;
+      const endMins = eh * 60 + em;
+      return {
+        open_now: nowMins >= startMins && nowMins < endMins,
+        hours_display: `${fmt(sh, sm)}–${fmt(eh, em)}`,
+      };
+    }
+  }
+
+  return { open_now: undefined, hours_display: undefined };
+}
+
+// ── Parse a single Overpass element into NearbyPlace ─────────────────────────
+function parseOsmElement(el: any): NearbyPlace | null {
   const tags = el.tags ?? {};
-  const amenityRaw: string = tags.amenity ?? "";
-  const amenity: FilterKey = OSM_AMENITY_MAP[amenityRaw] ?? "clinic";
-  const name: string = tags.name ?? tags["name:en"] ?? amenityRaw;
+  const name = tags.name;
   if (!name) return null;
 
-  // Coordinates: nodes have direct lat/lon, ways/relations have center
-  let lat: number;
-  let lon: number;
-  if (el.type === "node") {
-    lat = el.lat;
-    lon = el.lon;
-  } else if (el.center) {
-    lat = el.center.lat;
-    lon = el.center.lon;
-  } else {
-    return null;
-  }
+  const lat: number = el.type === "node" ? el.lat : el.center?.lat;
+  const lng: number = el.type === "node" ? el.lon : el.center?.lon;
+  if (!lat || !lng) return null;
 
-  // Address
-  const addrParts: string[] = [];
-  if (tags["addr:housenumber"] && tags["addr:street"]) {
-    addrParts.push(`${tags["addr:housenumber"]} ${tags["addr:street"]}`);
-  } else if (tags["addr:street"]) {
-    addrParts.push(tags["addr:street"]);
-  }
-  if (tags["addr:city"]) addrParts.push(tags["addr:city"]);
-  if (tags["addr:state"]) addrParts.push(tags["addr:state"]);
-  if (tags["addr:postcode"]) addrParts.push(tags["addr:postcode"]);
-  const vicinity = addrParts.join(", ") || "Address unavailable";
+  const amenityRaw: string = tags.amenity ?? "";
+  const amenity: FilterKey = OSM_AMENITY_MAP[amenityRaw] ?? "clinic";
 
-  const phone: string | undefined =
-    tags.phone ?? tags["contact:phone"] ?? undefined;
-  const website: string | undefined =
-    tags.website ?? tags["contact:website"] ?? undefined;
-  const hoursRaw: string | undefined = tags.opening_hours ?? undefined;
+  const addressParts = [
+    tags["addr:housenumber"],
+    tags["addr:street"],
+    tags["addr:city"],
+    tags["addr:state"],
+  ].filter(Boolean);
+  const vicinity =
+    addressParts.length >= 2 ? addressParts.join(" ") : "Address unavailable";
 
-  const open_now = parseOpenNow(hoursRaw);
-  const hours_display = hoursRaw;
+  const { open_now, hours_display } = parseOpeningHours(tags.opening_hours);
 
   return {
     place_id: `osm-${el.type}-${el.id}`,
     name,
     vicinity,
-    phone,
-    website,
+    phone: tags.phone ?? tags["contact:phone"] ?? undefined,
+    website: tags.website ?? tags["contact:website"] ?? undefined,
     open_now,
     hours_display,
-    geometry: { location: { lat, lng: lon } },
+    geometry: { location: { lat, lng } },
     amenity,
     detailsFetched: true,
   };
 }
 
-// ── Basic opening_hours parser ────────────────────────────────────────────────
-// Handles "24/7" and common patterns like "Mo-Fr 08:00-18:00; Sa 09:00-13:00"
-function parseOpenNow(ohStr: string | undefined): boolean | undefined {
-  if (!ohStr) return undefined;
-  if (ohStr.trim() === "24/7") return true;
-
-  const now = new Date();
-  const dayOrder = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
-  // getDay(): 0=Sun … 6=Sat — remap to dayOrder indices
-  const todayIdx = [6, 0, 1, 2, 3, 4, 5][now.getDay()];
-  const nowMins = now.getHours() * 60 + now.getMinutes();
-
-  const rules = ohStr.split(";").map((s) => s.trim());
-  for (const rule of rules) {
-    // "Mo-Fr 08:00-18:00" or "Sa 09:00-13:00"
-    const m = rule.match(
-      /^([A-Za-z]{2})(?:-([A-Za-z]{2}))?\s+(\d{2}:\d{2})-(\d{2}:\d{2})$/,
+// ── Nominatim reverse geocode fallback (free, no key) ────────────────────────
+async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
     );
-    if (!m) continue;
-    const [, d1, d2, tOpen, tClose] = m;
-    const startIdx = dayOrder.indexOf(d1);
-    const endIdx = d2 ? dayOrder.indexOf(d2) : startIdx;
-    if (startIdx < 0 || endIdx < 0) continue;
+    if (!res.ok) return null;
+    const json = await res.json();
+    const a = json.address ?? {};
 
-    const inDay =
-      startIdx <= endIdx
-        ? todayIdx >= startIdx && todayIdx <= endIdx
-        : todayIdx >= startIdx || todayIdx <= endIdx; // wrap e.g. Fr-Mo
-    if (!inDay) continue;
+    const street = [a.house_number, a.road ?? a.pedestrian ?? a.footway]
+      .filter(Boolean)
+      .join(" ");
+    const city = a.city ?? a.town ?? a.village ?? a.suburb ?? a.county ?? "";
+    const state = a.state ?? "";
 
-    const [oh, om] = tOpen.split(":").map(Number);
-    const [ch, cm] = tClose.split(":").map(Number);
-    if (nowMins >= oh * 60 + om && nowMins < ch * 60 + cm) return true;
+    const parts = [street, city, state].filter(Boolean);
+    if (parts.length > 0) return parts.join(", ");
+
+    // Last resort: first 3 segments of display_name
+    if (json.display_name) {
+      return json.display_name.split(",").slice(0, 3).join(",").trim();
+    }
+    return null;
+  } catch {
+    return null;
   }
-  return false;
 }
+
+// ── Fetch nearby facilities via Overpass (free, no key) ───────────────────────
+async function fetchNearbyFacilities(
+  userLat: number,
+  userLon: number,
+  radiusMeters = 5000,
+): Promise<NearbyPlace[]> {
+  const query = buildOverpassQuery(userLat, userLon, radiusMeters);
+
+  try {
+    const res = await fetch(OVERPASS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `data=${encodeURIComponent(query)}`,
+    });
+
+    if (!res.ok) {
+      console.error("Overpass failed:", res.status);
+      return [];
+    }
+
+    const json = await res.json();
+    const elements: any[] = json.elements ?? [];
+
+    const parsed: NearbyPlace[] = elements
+      .map((el) => parseOsmElement(el))
+      .filter((p): p is NearbyPlace => p !== null);
+
+    // Deduplicate by name within ~100 m grid cell
+    const seen = new Set<string>();
+    const deduped = parsed.filter((p) => {
+      const key = `${p.name.toLowerCase()}|${Math.round(p.geometry.location.lat / 0.001)}|${Math.round(p.geometry.location.lng / 0.001)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    // Sort closest first
+    deduped.sort((a, b) => {
+      const dA = (a.geometry.location.lat - userLat) ** 2 + (a.geometry.location.lng - userLon) ** 2;
+      const dB = (b.geometry.location.lat - userLat) ** 2 + (b.geometry.location.lng - userLon) ** 2;
+      return dA - dB;
+    });
+
+    return deduped;
+  } catch (err) {
+    console.error("Overpass fetch error:", err);
+    return [];
+  }
+}
+
 
 // ── Distance helper ───────────────────────────────────────────────────────────
 function distanceMiles(
@@ -219,64 +308,6 @@ function facilityIcon(amenity: FilterKey): any {
   if (amenity === "doctors") return "person";
   if (amenity === "dentist") return "medical-services";
   return "healing";
-}
-
-// ── Fetch nearby medical facilities via Overpass + OSM ────────────────────────
-async function fetchNearbyFacilities(
-  lat: number,
-  lon: number,
-  radiusMeters = 5000,
-): Promise<NearbyPlace[]> {
-  const query = buildOverpassQuery(lat, lon, radiusMeters);
-  console.log("Fetching from Overpass API...");
-
-  try {
-    const res = await fetch(OVERPASS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: `data=${encodeURIComponent(query)}`,
-    });
-
-    if (!res.ok) {
-      console.error("Overpass request failed:", res.status);
-      return [];
-    }
-
-    const json = await res.json();
-    const elements: any[] = json.elements ?? [];
-
-    // Parse elements and drop nulls
-    const parsed: NearbyPlace[] = elements
-      .map((el) => parseOsmElement(el, lat, lon))
-      .filter((p): p is NearbyPlace => p !== null);
-
-    // Deduplicate: same name within ~100 m grid cell (0.001° ≈ 111 m)
-    const seen = new Set<string>();
-    const deduped = parsed.filter((p) => {
-      const gridLat = Math.round(p.geometry.location.lat / 0.001);
-      const gridLon = Math.round(p.geometry.location.lng / 0.001);
-      const key = `${p.name.toLowerCase()}|${gridLat}|${gridLon}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
-    // Sort by distance (closest first)
-    deduped.sort((a, b) => {
-      const dA =
-        (a.geometry.location.lat - lat) ** 2 +
-        (a.geometry.location.lng - lon) ** 2;
-      const dB =
-        (b.geometry.location.lat - lat) ** 2 +
-        (b.geometry.location.lng - lon) ** 2;
-      return dA - dB;
-    });
-
-    return deduped;
-  } catch (err) {
-    console.error("Overpass fetch error:", err);
-    return [];
-  }
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -400,6 +431,24 @@ export default function HomeScreen() {
 
     setPlaces(results);
     setLoadingPlaces(false);
+
+    // Background pass: reverse-geocode places missing an address, one at a time
+    const missing = results.filter((p) => p.vicinity === "Address unavailable");
+    for (const place of missing) {
+      const address = await reverseGeocode(
+        place.geometry.location.lat,
+        place.geometry.location.lng,
+      );
+      if (address) {
+        setPlaces((prev) =>
+          prev.map((p) =>
+            p.place_id === place.place_id ? { ...p, vicinity: address } : p,
+          ),
+        );
+      }
+      // Nominatim rate limit: 1 req/sec
+      await new Promise((r) => setTimeout(r, 1100));
+    }
   }, []);
 
   useEffect(() => {
@@ -433,11 +482,8 @@ export default function HomeScreen() {
     centerMap(place.geometry.location.lat, place.geometry.location.lng);
   }, []);
 
-  // ── Action helpers ────────────────────────────────────────────────────────
-  const callPlace = (phone: string) =>
-    Linking.openURL(`tel:${phone.replace(/\s+/g, "")}`);
-
-  const directionsTo = (place: NearbyPlace) => {
+  // ── Open place in device maps app ────────────────────────────────────────
+  const openInMaps = (place: NearbyPlace) => {
     const { lat, lng } = place.geometry.location;
     const url = Platform.select({
       ios: `maps:0,0?q=${encodeURIComponent(place.name)}&ll=${lat},${lng}`,
@@ -446,10 +492,7 @@ export default function HomeScreen() {
     if (url) Linking.openURL(url);
   };
 
-  const openWebsite = (url: string) =>
-    Linking.openURL(url.startsWith("http") ? url : `https://${url}`);
-
-  // ── Expanded list card ────────────────────────────────────────────────────
+  // ── List card ─────────────────────────────────────────────────────────────
   const renderRowCard = (item: NearbyPlace) => {
     const isSelected = selectedPlace?.place_id === item.place_id;
     const dist = location
@@ -467,7 +510,7 @@ export default function HomeScreen() {
         onPress={() => focusPlace(item)}
         activeOpacity={0.88}
       >
-        {/* Top: icon + primary info */}
+        {/* Icon + name + distance */}
         <View style={styles.listTop}>
           <View style={[styles.listIcon, isSelected && styles.listIconSelected]}>
             <MaterialIcons
@@ -476,184 +519,39 @@ export default function HomeScreen() {
               color={isSelected ? "#fff" : PURPLE}
             />
           </View>
-
           <View style={styles.listInfo}>
             <View style={styles.listTitleRow}>
-              <Text style={styles.listName} numberOfLines={1}>
-                {item.name}
-              </Text>
+              <Text style={styles.listName} numberOfLines={1}>{item.name}</Text>
               {!!dist && <Text style={styles.listDist}>{dist}</Text>}
             </View>
-
-            {/* Type + status inline */}
-            <View style={styles.listMeta}>
-              <Text style={styles.listType}>{item.amenity}</Text>
-              {item.open_now !== undefined && (
-                <>
-                  <Text style={styles.listMetaDot}>·</Text>
-                  <View style={listStatusDot(item.open_now)} />
-                  <Text
-                    style={[
-                      styles.listStatusText,
-                      { color: item.open_now ? "#16A34A" : "#DC2626" },
-                    ]}
-                  >
-                    {item.open_now ? "Open" : "Closed"}
-                  </Text>
-                </>
-              )}
-            </View>
+            <Text style={styles.listType}>{item.amenity}</Text>
           </View>
         </View>
 
-        {/* Detail rows */}
-        {(item.vicinity !== "Address unavailable" || item.phone || item.hours_display) && (
-          <View style={styles.listDetails}>
-            {item.vicinity !== "Address unavailable" && (
-              <View style={styles.listDetailRow}>
-                <MaterialIcons name="location-on" size={13} color="#94A3B8" />
-                <Text style={styles.listDetailText} numberOfLines={1}>
-                  {item.vicinity}
-                </Text>
-              </View>
-            )}
-            {item.phone ? (
-              <TouchableOpacity
-                style={styles.listDetailRow}
-                onPress={() => callPlace(item.phone!)}
-                activeOpacity={0.7}
-              >
-                <MaterialIcons name="phone" size={13} color={PURPLE} />
-                <Text style={[styles.listDetailText, { color: PURPLE }]} numberOfLines={1}>
-                  {item.phone}
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-            {item.hours_display ? (
-              <View style={styles.listDetailRow}>
-                <MaterialIcons name="schedule" size={13} color="#94A3B8" />
-                <Text style={styles.listDetailText} numberOfLines={1}>
-                  {item.hours_display}
-                </Text>
-              </View>
-            ) : null}
+        {/* Address */}
+        {item.vicinity !== "Address unavailable" && (
+          <View style={styles.listDetailRow}>
+            <MaterialIcons name="location-on" size={13} color="#94A3B8" />
+            <Text style={styles.listDetailText} numberOfLines={2}>
+              {item.vicinity}
+            </Text>
           </View>
         )}
 
-        {/* Action footer */}
-        <View style={styles.listFooter}>
-          <TouchableOpacity
-            style={styles.listActionPrimary}
-            onPress={() => directionsTo(item)}
-            activeOpacity={0.82}
-          >
-            <MaterialIcons name="directions" size={15} color="#fff" />
-            <Text style={styles.listActionPrimaryText}>Directions</Text>
-          </TouchableOpacity>
-          {item.phone ? (
-            <TouchableOpacity
-              style={styles.listActionSecondary}
-              onPress={() => callPlace(item.phone!)}
-              activeOpacity={0.82}
-            >
-              <MaterialIcons name="call" size={15} color={PURPLE} />
-              <Text style={styles.listActionSecondaryText}>Call</Text>
-            </TouchableOpacity>
-          ) : null}
-          {item.website ? (
-            <TouchableOpacity
-              style={styles.listActionSecondary}
-              onPress={() => openWebsite(item.website!)}
-              activeOpacity={0.82}
-            >
-              <MaterialIcons name="language" size={15} color={PURPLE} />
-              <Text style={styles.listActionSecondaryText}>Website</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
+        {/* Get More Info button */}
+        <TouchableOpacity
+          style={styles.moreInfoBtn}
+          onPress={() => openInMaps(item)}
+          activeOpacity={0.82}
+        >
+          <MaterialIcons name="open-in-new" size={14} color="#fff" />
+          <Text style={styles.moreInfoText}>Get More Info</Text>
+        </TouchableOpacity>
       </TouchableOpacity>
     );
   };
 
   // ── Compact horizontal card (collapsed peek) ──────────────────────────────
-  const renderCompactCard = useCallback(
-    ({ item }: { item: NearbyPlace }) => {
-      const isSelected = selectedPlace?.place_id === item.place_id;
-      const dist = location
-        ? distanceMiles(
-            location.coords.latitude,
-            location.coords.longitude,
-            item.geometry.location.lat,
-            item.geometry.location.lng,
-          )
-        : "";
-      return (
-        <TouchableOpacity
-          style={[styles.card, isSelected && styles.cardSelected]}
-          onPress={() => focusPlace(item)}
-          activeOpacity={0.88}
-        >
-          {/* Type label */}
-          <Text style={styles.cardType}>{item.amenity.toUpperCase()}</Text>
-
-          {/* Icon + name block */}
-          <View style={styles.cardIconRow}>
-            <View style={[styles.cardIconBadge, isSelected && styles.cardIconBadgeSelected]}>
-              <MaterialIcons
-                name={facilityIcon(item.amenity)}
-                size={22}
-                color={isSelected ? "#fff" : PURPLE}
-              />
-            </View>
-            <Text style={styles.cardName} numberOfLines={2}>
-              {item.name}
-            </Text>
-          </View>
-
-          {/* Distance + status */}
-          <View style={styles.cardStatusRow}>
-            {!!dist && (
-              <View style={styles.cardDistBadge}>
-                <MaterialIcons name="near-me" size={11} color="#64748B" />
-                <Text style={styles.cardDistText}>{dist}</Text>
-              </View>
-            )}
-            {item.open_now !== undefined && (
-              <View style={cardOpenBadge(item.open_now)}>
-                <View style={cardOpenDot(item.open_now)} />
-                <Text style={cardOpenText(item.open_now)}>
-                  {item.open_now ? "Open" : "Closed"}
-                </Text>
-              </View>
-            )}
-          </View>
-
-          {/* Divider + actions */}
-          <View style={styles.cardDivider} />
-          <View style={styles.cardActions}>
-            <TouchableOpacity
-              style={styles.cardPrimaryBtn}
-              onPress={() => directionsTo(item)}
-              activeOpacity={0.82}
-            >
-              <MaterialIcons name="directions" size={14} color="#fff" />
-              <Text style={styles.cardPrimaryBtnText}>Directions</Text>
-            </TouchableOpacity>
-            {item.phone ? (
-              <TouchableOpacity
-                style={styles.cardIconBtn}
-                onPress={() => callPlace(item.phone!)}
-                activeOpacity={0.82}
-              >
-                <MaterialIcons name="call" size={16} color={PURPLE} />
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        </TouchableOpacity>
-      );
-    },
-    [selectedPlace, location, focusPlace],
-  );
 
   // ── Main render ───────────────────────────────────────────────────────────
   return (
@@ -879,7 +777,7 @@ export default function HomeScreen() {
             <ActivityIndicator size="small" color={PURPLE} />
             <Text style={styles.loadingLabel}>Searching nearby facilities…</Text>
           </View>
-        ) : isExpanded ? (
+        ) : (
           <ScrollView
             style={{ flex: 1 }}
             contentContainerStyle={styles.expandedList}
@@ -891,52 +789,12 @@ export default function HomeScreen() {
               filteredPlaces.map((item) => renderRowCard(item))
             )}
           </ScrollView>
-        ) : (
-          <FlatList
-            data={filteredPlaces}
-            keyExtractor={(item) => item.place_id}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.cardList}
-            renderItem={renderCompactCard}
-            windowSize={5}
-            maxToRenderPerBatch={6}
-            initialNumToRender={4}
-            removeClippedSubviews
-          />
         )}
       </Animated.View>
     </View>
   );
 }
 
-// ── Dynamic style helpers ─────────────────────────────────────────────────────
-const cardOpenBadge = (open: boolean) => ({
-  flexDirection: "row" as const,
-  alignItems: "center" as const,
-  gap: 4,
-  backgroundColor: open ? "#F0FDF4" : "#FEF2F2",
-  paddingHorizontal: 7,
-  paddingVertical: 3,
-  borderRadius: 100,
-});
-const cardOpenDot = (open: boolean) => ({
-  width: 6,
-  height: 6,
-  borderRadius: 3,
-  backgroundColor: open ? "#16A34A" : "#DC2626",
-});
-const cardOpenText = (open: boolean) => ({
-  fontSize: 11,
-  fontWeight: "700" as const,
-  color: open ? "#16A34A" : "#DC2626",
-});
-const listStatusDot = (open: boolean) => ({
-  width: 6,
-  height: 6,
-  borderRadius: 3,
-  backgroundColor: open ? "#16A34A" : "#DC2626",
-});
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
@@ -1153,108 +1011,7 @@ const styles = StyleSheet.create({
   loadingLabel: { fontSize: 14, color: "#94A3B8" },
   emptyText: { textAlign: "center", color: "#94A3B8", marginTop: 40, fontSize: 14 },
 
-  // ── Compact horizontal cards (collapsed peek) ─────────────────────────────
-  cardList: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 16,
-    gap: 10,
-  },
-  card: {
-    width: 200,
-    backgroundColor: "#fff",
-    borderRadius: 20,
-    padding: 14,
-    shadowColor: "#64748B",
-    shadowOpacity: 0.1,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  cardSelected: {
-    shadowColor: PURPLE,
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    elevation: 5,
-  },
-  cardType: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: PURPLE,
-    letterSpacing: 1.2,
-    marginBottom: 8,
-    textTransform: "uppercase",
-  },
-  cardIconRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    marginBottom: 10,
-  },
-  cardIconBadge: {
-    width: 42,
-    height: 42,
-    borderRadius: 13,
-    backgroundColor: "#EDE9FE",
-    justifyContent: "center",
-    alignItems: "center",
-    flexShrink: 0,
-  },
-  cardIconBadgeSelected: { backgroundColor: PURPLE },
-  cardName: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#0F172A",
-    lineHeight: 19,
-  },
-  cardStatusRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 12,
-  },
-  cardDistBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 3,
-    backgroundColor: "#F1F5F9",
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 100,
-  },
-  cardDistText: { fontSize: 11, color: "#64748B", fontWeight: "600" },
-  cardDivider: {
-    height: 1,
-    backgroundColor: "#F1F5F9",
-    marginBottom: 10,
-  },
-  cardActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  cardPrimaryBtn: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: PURPLE,
-    borderRadius: 100,
-    paddingVertical: 8,
-    gap: 5,
-  },
-  cardPrimaryBtnText: { color: "#fff", fontSize: 12, fontWeight: "700" },
-  cardIconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#EDE9FE",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  // ── Expanded list cards ────────────────────────────────────────────────────
+  // ── List cards ────────────────────────────────────────────────────────────
   expandedList: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 36, gap: 10 },
   listCard: {
     backgroundColor: "#fff",
@@ -1316,53 +1073,28 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     textTransform: "capitalize",
   },
-  listMetaDot: { fontSize: 12, color: "#CBD5E1" },
-  listStatusText: { fontSize: 12, fontWeight: "700" },
-
-  listDetails: {
-    borderTopWidth: 1,
-    borderTopColor: "#F1F5F9",
-    paddingTop: 10,
-    marginBottom: 12,
-    gap: 6,
-  },
   listDetailRow: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
+    alignItems: "flex-start",
+    gap: 6,
+    marginTop: 8,
   },
   listDetailText: {
     fontSize: 13,
-    color: "#475569",
+    color: "#64748B",
     flex: 1,
     lineHeight: 18,
   },
 
-  listFooter: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  listActionPrimary: {
-    flex: 1,
+  moreInfoBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: PURPLE,
     borderRadius: 100,
     paddingVertical: 10,
+    marginTop: 12,
     gap: 6,
   },
-  listActionPrimaryText: { color: "#fff", fontSize: 13, fontWeight: "700" },
-  listActionSecondary: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1.5,
-    borderColor: "#E2E8F0",
-    borderRadius: 100,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    gap: 5,
-  },
-  listActionSecondaryText: { color: PURPLE, fontSize: 13, fontWeight: "700" },
+  moreInfoText: { color: "#fff", fontSize: 13, fontWeight: "700" },
 });
