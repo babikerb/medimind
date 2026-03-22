@@ -15,12 +15,11 @@ symptom_agent = Agent(
     endpoint=["http://localhost:8001/submit"]
 )
 
-# Import models here to avoid circular imports
 from agents.models import (
-    SymptomRequest,
-    FollowUpQuestionsResponse,
-    FollowUpAnswersRequest,
-    TriageResult
+    GatewaySymptomRequest,
+    GatewayQuestionsResponse,
+    GatewayTriageRequest,
+    GatewayTriageResponse,
 )
 
 symptom_protocol = Protocol("SymptomProtocol")
@@ -59,10 +58,9 @@ def build_profile_context(profile: dict) -> str:
     return context
 
 
-# Step 1. Generate follow up questions
-@symptom_protocol.on_message(model=SymptomRequest, replies={FollowUpQuestionsResponse})
-async def handle_symptom_input(ctx: Context, sender: str, msg: SymptomRequest):
-    ctx.logger.info(f"[SymptomAgent] Step 1 received from {sender}: {msg.symptom_input[:50]}")
+@symptom_protocol.on_message(model=GatewaySymptomRequest, replies={GatewayQuestionsResponse}, allow_unverified=True)
+async def handle_symptom_input(ctx: Context, sender: str, msg: GatewaySymptomRequest):
+    ctx.logger.info(f"[SymptomAgent] Generating questions for user {msg.user_id}")
 
     system_prompt = """You are a medical triage assistant. A patient has described their symptoms.
 Generate 1-5 focused follow-up questions to better classify urgency and department needed.
@@ -73,7 +71,7 @@ Rules:
 - Respond ONLY with a valid JSON array of strings, no explanation, no markdown
 Example: ["How long have you had this pain?", "Is the pain sharp or dull?"]"""
 
-    user_message = build_profile_context(msg.patient_profile) + f"Symptoms: {msg.symptom_input}"
+    user_message = build_profile_context(msg.patient_profile or {}) + f"Symptoms: {msg.symptom_input}"
 
     try:
         raw = call_groq(system_prompt, user_message)
@@ -85,8 +83,8 @@ Example: ["How long have you had this pain?", "Is the pain sharp or dull?"]"""
         ctx.logger.error(f"[SymptomAgent] Question generation failed: {e}")
         questions = ["Can you describe your symptoms in more detail?"]
 
-    ctx.logger.info(f"[SymptomAgent] Returning {len(questions)} questions to {sender}")
-    await ctx.send(sender, FollowUpQuestionsResponse(
+    ctx.logger.info(f"[SymptomAgent] Returning {len(questions)} questions")
+    await ctx.send(sender, GatewayQuestionsResponse(
         user_id=msg.user_id,
         symptom_input=msg.symptom_input,
         questions=questions,
@@ -94,10 +92,9 @@ Example: ["How long have you had this pain?", "Is the pain sharp or dull?"]"""
     ))
 
 
-# Step 2. Score ESI and return triage result
-@symptom_protocol.on_message(model=FollowUpAnswersRequest, replies={TriageResult})
-async def handle_followup_answers(ctx: Context, sender: str, msg: FollowUpAnswersRequest):
-    ctx.logger.info(f"[SymptomAgent] Step 2 received from {sender}")
+@symptom_protocol.on_message(model=GatewayTriageRequest, replies={GatewayTriageResponse}, allow_unverified=True)
+async def handle_triage_request(ctx: Context, sender: str, msg: GatewayTriageRequest):
+    ctx.logger.info(f"[SymptomAgent] Scoring ESI for user {msg.user_id}")
 
     system_prompt = """You are a medical triage assistant trained on the Emergency Severity Index (ESI).
 
@@ -129,36 +126,42 @@ Respond ONLY with valid JSON, no markdown:
 }"""
 
     qa_pairs = "\n".join([f"Q: {q}\nA: {a}" for q, a in zip(msg.questions, msg.answers)])
-    user_message = build_profile_context(msg.patient_profile) + \
-        f"Initial symptoms: {msg.symptom_input}\n\nFollow-up:\n{qa_pairs}"
+    user_message = (
+        build_profile_context(msg.patient_profile or {})
+        + f"Initial symptoms: {msg.symptom_input}\n\nFollow-up:\n{qa_pairs}"
+    )
 
     try:
         raw = call_groq(system_prompt, user_message)
         raw = raw.replace("```json", "").replace("```", "").strip()
-        result = json.loads(raw)
+        triage = json.loads(raw)
     except Exception as e:
         ctx.logger.error(f"[SymptomAgent] Triage parsing failed: {e}")
-        result = {
+        triage = {
             "esi_level": 3,
             "identified_department": "general",
             "urgency_summary": "Unable to parse triage. Defaulting to ESI 3.",
             "recommended_care_type": "emergency_room",
-            "flags": {"call_911": False, "redirect_to_urgent_care": False, "emtala_applies": False}
+            "flags": {
+                "call_911": False,
+                "redirect_to_urgent_care": False,
+                "emtala_applies": False
+            }
         }
 
-    triage = TriageResult(
-        user_id=msg.user_id,
-        esi_level=result["esi_level"],
-        identified_department=result["identified_department"],
-        urgency_summary=result["urgency_summary"],
-        recommended_care_type=result["recommended_care_type"],
-        call_911=result["flags"]["call_911"],
-        redirect_to_urgent_care=result["flags"]["redirect_to_urgent_care"],
-        emtala_applies=result["flags"]["emtala_applies"]
+    ctx.logger.info(
+        f"[SymptomAgent] ESI {triage['esi_level']} — {triage['identified_department']}"
     )
 
-    ctx.logger.info(f"[SymptomAgent] ESI {triage.esi_level} — {triage.identified_department} — sending to {sender}")
-    await ctx.send(sender, triage)
+    await ctx.send(sender, GatewayTriageResponse(
+        user_id=msg.user_id,
+        triage=triage,
+        recommended_hospitals=[],
+        session_id=""
+    ))
 
 
 symptom_agent.include(symptom_protocol, publish_manifest=True)
+
+if __name__ == "__main__":
+    symptom_agent.run()
