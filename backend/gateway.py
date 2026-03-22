@@ -17,6 +17,7 @@ SYMPTOM_AGENT_ADDRESS = os.getenv("SYMPTOM_AGENT_ADDRESS")
 ROUTING_AGENT_ADDRESS = os.getenv("ROUTING_AGENT_ADDRESS")
 MONITOR_AGENT_ADDRESS = os.getenv("MONITOR_AGENT_ADDRESS")
 ALERT_AGENT_ADDRESS   = os.getenv("ALERT_AGENT_ADDRESS")
+FOLLOWUP_AGENT_ADDRESS = os.getenv("FOLLOWUP_AGENT_ADDRESS")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
@@ -32,6 +33,7 @@ local_resolver = RulesBasedResolver({
     ROUTING_AGENT_ADDRESS: BUREAU_ENDPOINT,
     MONITOR_AGENT_ADDRESS: BUREAU_ENDPOINT,
     ALERT_AGENT_ADDRESS:   BUREAU_ENDPOINT,
+    FOLLOWUP_AGENT_ADDRESS: BUREAU_ENDPOINT,
 })
 
 # Import models
@@ -42,11 +44,6 @@ from agents.models import (
     GatewayTriageResponse,
     RoutingRequest,
 )
-
-# ── FIX #2: No gateway_agent — this is pure FastAPI, not a uAgent ─────────────
-# The gateway doesn't need to BE an agent. It just needs to TALK to agents.
-# Removing the agent eliminates the Bureau conflict entirely.
-
 
 # Helpers
 
@@ -113,6 +110,17 @@ class FollowUpAnswersPayload(BaseModel):
     user_latitude: float
     user_longitude: float
     insurance_provider: Optional[str] = None
+
+class AlertSubscribePayload(BaseModel):
+    user_id: str
+    session_id: str
+    hospital_id: str
+    department: str
+
+class FollowUpCarePayload(BaseModel):
+    user_id: str
+    triage: dict
+    hospital_name: str
 
 
 # Endpoints
@@ -203,6 +211,111 @@ async def submit_triage(payload: FollowUpAnswersPayload):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Triage error: {str(e)}")
+
+# Subscribe to wait time alerts for a specific hospital
+@app.post("/alert/subscribe")
+async def subscribe_alert(payload: AlertSubscribePayload):
+    try:
+        from agents.models import AlertRequest
+        data = await send_and_receive(
+            ALERT_AGENT_ADDRESS,
+            AlertRequest(
+                user_id=payload.user_id,
+                session_id=payload.session_id,
+                hospital_id=payload.hospital_id,
+                department=payload.department
+            )
+        )
+        return {
+            "status": "subscribed",
+            "message": data.get("message", "Alert registered"),
+            "session_id": payload.session_id,
+            "hospital_id": payload.hospital_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AlertAgent error: {str(e)}")
+
+# Poll the latest wait time for a subscribed hospital
+@app.get("/alert/status/{session_id}")
+async def get_alert_status(session_id: str):
+    try:
+        # Look up the routing session to get the hospital info
+        session = supabase.table("routing_sessions") \
+            .select("*") \
+            .eq("id", session_id) \
+            .limit(1) \
+            .execute()
+
+        if not session.data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        session_data = session.data[0]
+        hospitals = session_data.get("recommended_hospitals", [])
+        if not hospitals:
+            raise HTTPException(status_code=404, detail="No hospitals in session")
+
+        # Get the top recommended hospital
+        hospital = hospitals[0]
+        hospital_id = hospital.get("id")
+        department = session_data.get("identified_department", "general")
+
+        # Fetch latest capacity snapshot
+        snapshot = supabase.table("hospital_capacity_snapshots") \
+            .select("*") \
+            .eq("hospital_id", hospital_id) \
+            .eq("department", department) \
+            .order("snapshot_time", desc=True) \
+            .limit(1) \
+            .execute()
+
+        if not snapshot.data:
+            return {
+                "session_id": session_id,
+                "hospital_name": hospital.get("name"),
+                "status": "no_data",
+                "message": "No capacity data available yet"
+            }
+
+        current = snapshot.data[0]
+        return {
+            "session_id": session_id,
+            "hospital_id": hospital_id,
+            "hospital_name": hospital.get("name"),
+            "department": department,
+            "available_beds": current["available_beds"],
+            "estimated_wait_minutes": current["estimated_wait_minutes"],
+            "last_updated": current["snapshot_time"],
+            "status": "active"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Alert status error: {str(e)}")
+    
+# Generate a post visit follow up care plan based on triage results
+@app.post("/followup")
+async def get_followup_care(payload: FollowUpCarePayload):
+    try:
+        from agents.models import FollowUpCareRequest
+        data = await send_and_receive(
+            FOLLOWUP_AGENT_ADDRESS,
+            FollowUpCareRequest(
+                user_id=payload.user_id,
+                triage=payload.triage,
+                hospital_name=payload.hospital_name
+            )
+        )
+        return {
+            "care_plan": data.get("care_plan", {}),
+            "user_id": payload.user_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"FollowUpAgent error: {str(e)}")
 
 
 if __name__ == "__main__":

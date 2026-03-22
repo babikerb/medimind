@@ -76,12 +76,23 @@ class AlertNotification(Model):
     message: str
     new_wait_minutes: int
 
+# Follow up Care Agent
+
+class FollowUpCareRequest(Model):
+    user_id: str
+    triage: dict
+    hospital_name: str
+
+class FollowUpCareResponse(Model):
+    user_id: str
+    care_plan: dict
+
 # Gateway Agent bridge models
 # These are the models used for query() based communication
 # on_query handlers use these to receive requests and send responses
 
+# Gateway Symptom Agent generate follow up questions
 class GatewaySymptomRequest(Model):
-    """Gateway → Symptom Agent: generate follow-up questions."""
     user_id: str
     symptom_input: str
     patient_profile: Optional[dict] = None
