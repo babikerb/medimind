@@ -1,7 +1,7 @@
 from uagents import Model
 from typing import Optional, List
 
-# --- Symptom Agent Messages ---
+# Symptom agent messages
 
 class SymptomRequest(Model):
     user_id: str
@@ -31,7 +31,7 @@ class TriageResult(Model):
     redirect_to_urgent_care: bool
     emtala_applies: bool
 
-# --- Routing Agent Messages ---
+# Routing agent messages
 
 class RoutingRequest(Model):
     user_id: str
@@ -46,7 +46,7 @@ class RoutingResponse(Model):
     esi_level: int
     session_id: str
 
-# --- Monitor Agent Messages ---
+# Monitor agent messages
 
 class CapacityUpdateRequest(Model):
     hospital_id: str
@@ -57,7 +57,7 @@ class CapacitySnapshot(Model):
     available_beds: int
     estimated_wait_minutes: int
 
-# --- Alert Agent Messages ---
+# Alert agent messages
 
 class AlertRequest(Model):
     user_id: str

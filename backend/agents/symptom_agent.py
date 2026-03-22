@@ -2,18 +2,11 @@ import os
 import json
 import requests
 from uagents import Agent, Context, Protocol
-from models import (
-    SymptomRequest,
-    FollowUpQuestionsResponse,
-    FollowUpAnswersRequest,
-    TriageResult
-)
 from dotenv import load_dotenv
 
 load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-ROUTING_AGENT_ADDRESS = os.getenv("ROUTING_AGENT_ADDRESS", "")
 
 symptom_agent = Agent(
     name="symptom_agent",
@@ -22,7 +15,15 @@ symptom_agent = Agent(
     endpoint=["http://localhost:8001/submit"]
 )
 
-protocol = Protocol("SymptomProtocol")
+# Import models here to avoid circular imports
+from agents.models import (
+    SymptomRequest,
+    FollowUpQuestionsResponse,
+    FollowUpAnswersRequest,
+    TriageResult
+)
+
+symptom_protocol = Protocol("SymptomProtocol")
 
 
 def call_groq(system_prompt: str, user_message: str) -> str:
@@ -45,49 +46,46 @@ def call_groq(system_prompt: str, user_message: str) -> str:
     return response.json()["choices"][0]["message"]["content"].strip()
 
 
-# Step 1. Receive symptoms, return follow up questions
-@protocol.on_message(model=SymptomRequest)
+def build_profile_context(profile: dict) -> str:
+    if not profile:
+        return ""
+    context = ""
+    if profile.get("age"):
+        context += f"Patient age: {profile['age']}\n"
+    if profile.get("medications"):
+        context += f"Medications: {', '.join(profile['medications'])}\n"
+    if profile.get("medical_history"):
+        context += f"Medical history: {', '.join(profile['medical_history'])}\n"
+    return context
+
+
+# Step 1. Generate follow up questions
+@symptom_protocol.on_message(model=SymptomRequest, replies={FollowUpQuestionsResponse})
 async def handle_symptom_input(ctx: Context, sender: str, msg: SymptomRequest):
-    ctx.logger.info(f"Received symptoms from {msg.user_id}: {msg.symptom_input}")
+    ctx.logger.info(f"[SymptomAgent] Step 1 received from {sender}: {msg.symptom_input[:50]}")
 
-    system_prompt = """
-You are a medical triage assistant. A patient has described their symptoms.
+    system_prompt = """You are a medical triage assistant. A patient has described their symptoms.
 Generate 1-5 focused follow-up questions to better classify urgency and department needed.
-
 Rules:
-- Ask only what is clinically relevant to the symptoms described
-- Do not ask more than 5 questions
-- Questions should be simple enough for a non-medical person to answer
+- Ask only what is clinically relevant
+- Max 5 questions
+- Simple enough for a non-medical person
 - Respond ONLY with a valid JSON array of strings, no explanation, no markdown
-Example: ["How long have you had this pain?", "Is the pain sharp or dull?"]
-"""
+Example: ["How long have you had this pain?", "Is the pain sharp or dull?"]"""
 
-    profile_context = ""
-    if msg.patient_profile:
-        age = msg.patient_profile.get("age")
-        meds = msg.patient_profile.get("medications", [])
-        history = msg.patient_profile.get("medical_history", [])
-        if age:
-            profile_context += f"Patient age: {age}\n"
-        if meds:
-            profile_context += f"Medications: {', '.join(meds)}\n"
-        if history:
-            profile_context += f"Medical history: {', '.join(history)}\n"
-
-    user_message = f"{profile_context}Symptoms: {msg.symptom_input}"
+    user_message = build_profile_context(msg.patient_profile) + f"Symptoms: {msg.symptom_input}"
 
     try:
         raw = call_groq(system_prompt, user_message)
-        # Strip markdown fences if present
         raw = raw.replace("```json", "").replace("```", "").strip()
         questions = json.loads(raw)
-        # Flatten if Groq returned list of objects instead of strings
         if questions and isinstance(questions[0], dict):
             questions = [q.get("question", str(q)) for q in questions]
     except Exception as e:
-        ctx.logger.error(f"Failed to generate questions: {e}")
+        ctx.logger.error(f"[SymptomAgent] Question generation failed: {e}")
         questions = ["Can you describe your symptoms in more detail?"]
 
+    ctx.logger.info(f"[SymptomAgent] Returning {len(questions)} questions to {sender}")
     await ctx.send(sender, FollowUpQuestionsResponse(
         user_id=msg.user_id,
         symptom_input=msg.symptom_input,
@@ -96,29 +94,28 @@ Example: ["How long have you had this pain?", "Is the pain sharp or dull?"]
     ))
 
 
-# Step 2. Receive answers, return ESI triage result
-@protocol.on_message(model=FollowUpAnswersRequest)
+# Step 2. Score ESI and return triage result
+@symptom_protocol.on_message(model=FollowUpAnswersRequest, replies={TriageResult})
 async def handle_followup_answers(ctx: Context, sender: str, msg: FollowUpAnswersRequest):
-    ctx.logger.info(f"Received follow-up answers from {msg.user_id}")
+    ctx.logger.info(f"[SymptomAgent] Step 2 received from {sender}")
 
-    system_prompt = """
-You are a medical triage assistant trained on the Emergency Severity Index (ESI) framework.
+    system_prompt = """You are a medical triage assistant trained on the Emergency Severity Index (ESI).
 
 ESI Levels:
-- ESI 1: Immediate life threat. Requires immediate intervention. (cardiac arrest, severe respiratory failure)
-- ESI 2: High risk. Confused, lethargic, or severe pain. (stroke, chest pain, overdose)
-- ESI 3: Stable but needs multiple resources. (abdominal pain, moderate injury, fever with infection)
-- ESI 4: Stable, needs one resource. (minor laceration, UTI, mild asthma)
-- ESI 5: No resources needed. (prescription refill, minor cold, small rash)
+- ESI 1: Immediate life threat (cardiac arrest, severe respiratory failure)
+- ESI 2: High risk (stroke, chest pain, overdose)
+- ESI 3: Stable, needs multiple resources (abdominal pain, moderate injury, fever)
+- ESI 4: Stable, needs one resource (minor laceration, UTI, mild asthma)
+- ESI 5: No resources needed (prescription refill, minor cold, rash)
 
 Departments:
 - ICU: cardiac, neurological, respiratory, multi-trauma, overdose
-- surgery: fractures, appendicitis, internal bleeding, lacerations requiring OR
-- pediatric: patients under 18 with any condition
-- psychiatric: mental health crisis, suicidal ideation, psychosis
+- surgery: fractures, appendicitis, internal bleeding
+- pediatric: patients under 18
+- psychiatric: mental health crisis, suicidal ideation
 - general: everything else
 
-Respond ONLY with a valid JSON object, no explanation, no markdown.
+Respond ONLY with valid JSON, no markdown:
 {
   "esi_level": <1-5>,
   "identified_department": "<ICU|surgery|pediatric|psychiatric|general>",
@@ -129,33 +126,18 @@ Respond ONLY with a valid JSON object, no explanation, no markdown.
     "redirect_to_urgent_care": <true if ESI 4 or 5>,
     "emtala_applies": <true if ESI 1 or 2>
   }
-}
-"""
+}"""
 
-    qa_pairs = ""
-    for q, a in zip(msg.questions, msg.answers):
-        qa_pairs += f"Q: {q}\nA: {a}\n"
-
-    profile_context = ""
-    if msg.patient_profile:
-        age = msg.patient_profile.get("age")
-        meds = msg.patient_profile.get("medications", [])
-        history = msg.patient_profile.get("medical_history", [])
-        if age:
-            profile_context += f"Patient age: {age}\n"
-        if meds:
-            profile_context += f"Medications: {', '.join(meds)}\n"
-        if history:
-            profile_context += f"Medical history: {', '.join(history)}\n"
-
-    user_message = f"{profile_context}Initial symptoms: {msg.symptom_input}\n\nFollow-up:\n{qa_pairs}"
+    qa_pairs = "\n".join([f"Q: {q}\nA: {a}" for q, a in zip(msg.questions, msg.answers)])
+    user_message = build_profile_context(msg.patient_profile) + \
+        f"Initial symptoms: {msg.symptom_input}\n\nFollow-up:\n{qa_pairs}"
 
     try:
         raw = call_groq(system_prompt, user_message)
         raw = raw.replace("```json", "").replace("```", "").strip()
         result = json.loads(raw)
     except Exception as e:
-        ctx.logger.error(f"Triage parsing failed: {e}")
+        ctx.logger.error(f"[SymptomAgent] Triage parsing failed: {e}")
         result = {
             "esi_level": 3,
             "identified_department": "general",
@@ -175,15 +157,8 @@ Respond ONLY with a valid JSON object, no explanation, no markdown.
         emtala_applies=result["flags"]["emtala_applies"]
     )
 
-    if ROUTING_AGENT_ADDRESS:
-        await ctx.send(ROUTING_AGENT_ADDRESS, triage)
-    else:
-        ctx.logger.warning("ROUTING_AGENT_ADDRESS not set — triage result not forwarded")
-
+    ctx.logger.info(f"[SymptomAgent] ESI {triage.esi_level} — {triage.identified_department} — sending to {sender}")
     await ctx.send(sender, triage)
 
 
-symptom_agent.include(protocol)
-
-if __name__ == "__main__":
-    symptom_agent.run()
+symptom_agent.include(symptom_protocol, publish_manifest=True)
