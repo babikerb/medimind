@@ -34,8 +34,12 @@ const SHEET_PEEK = 290; // visible height when collapsed
 const SNAP_EXPANDED = 0;
 const SNAP_COLLAPSED = SHEET_HEIGHT - SHEET_PEEK;
 
-// ── Overpass (free, no key) ───────────────────────────────────────────────────
-const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
+// ── Overpass mirrors (tried in order until one succeeds) ─────────────────────
+const OVERPASS_MIRRORS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+];
 
 // ── Filter categories ─────────────────────────────────────────────────────────
 type FilterKey =
@@ -87,14 +91,14 @@ const OSM_AMENITY_MAP: Record<string, FilterKey> = {
 function buildOverpassQuery(lat: number, lon: number, r: number): string {
   const amenities = Object.keys(OSM_AMENITY_MAP).join("|");
   return `
-    [out:json][timeout:25];
-    (
-      node["amenity"~"${amenities}"](around:${r},${lat},${lon});
-      way["amenity"~"${amenities}"](around:${r},${lat},${lon});
-      relation["amenity"~"${amenities}"](around:${r},${lat},${lon});
-    );
-    out center;
-  `.trim();
+[out:json][timeout:25];
+(
+  node["amenity"~"^(${amenities})$"](around:${r},${lat},${lon});
+  way["amenity"~"^(${amenities})$"](around:${r},${lat},${lon});
+  relation["amenity"~"^(${amenities})$"](around:${r},${lat},${lon});
+);
+out center;
+`.trim();
 }
 
 // ── OSM opening_hours parser ──────────────────────────────────────────────────
@@ -205,9 +209,12 @@ function parseOsmElement(el: any): NearbyPlace | null {
 // ── Nominatim reverse geocode fallback (free, no key) ────────────────────────
 async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
   try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
-    );
+    const res = await Promise.race([
+      fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
+      ),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 8000)),
+    ]);
     if (!res.ok) return null;
     const json = await res.json();
     const a = json.address ?? {};
@@ -231,56 +238,122 @@ async function reverseGeocode(lat: number, lng: number): Promise<string | null> 
   }
 }
 
-// ── Fetch nearby facilities via Overpass (free, no key) ───────────────────────
+// ── Fetch nearby facilities via Overpass (tries all mirrors) ─────────────────
 async function fetchNearbyFacilities(
   userLat: number,
   userLon: number,
   radiusMeters = 5000,
 ): Promise<NearbyPlace[]> {
   const query = buildOverpassQuery(userLat, userLon, radiusMeters);
+  const body = `data=${encodeURIComponent(query)}`;
 
-  try {
-    const res = await fetch(OVERPASS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: `data=${encodeURIComponent(query)}`,
-    });
+  const timeout = (ms: number) =>
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("timeout")), ms),
+    );
 
-    if (!res.ok) {
-      console.error("Overpass failed:", res.status);
-      return [];
+  for (const mirror of OVERPASS_MIRRORS) {
+    try {
+      const res = await Promise.race([
+        fetch(mirror, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body,
+        }),
+        timeout(20000),
+      ]);
+
+      if (!res.ok) {
+        console.warn(`Overpass mirror ${mirror} returned ${res.status}, trying next…`);
+        continue;
+      }
+
+      const json = await res.json();
+      const elements: any[] = json.elements ?? [];
+
+      const parsed: NearbyPlace[] = elements
+        .map((el) => parseOsmElement(el))
+        .filter((p): p is NearbyPlace => p !== null);
+
+      // Deduplicate by name within ~100 m grid cell
+      const seen = new Set<string>();
+      const deduped = parsed.filter((p) => {
+        const key = `${p.name.toLowerCase()}|${Math.round(p.geometry.location.lat / 0.001)}|${Math.round(p.geometry.location.lng / 0.001)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      deduped.sort((a, b) => {
+        const dA = (a.geometry.location.lat - userLat) ** 2 + (a.geometry.location.lng - userLon) ** 2;
+        const dB = (b.geometry.location.lat - userLat) ** 2 + (b.geometry.location.lng - userLon) ** 2;
+        return dA - dB;
+      });
+
+      return deduped;
+    } catch (err: any) {
+      console.warn(`Overpass mirror ${mirror} failed:`, err?.message ?? err);
     }
-
-    const json = await res.json();
-    const elements: any[] = json.elements ?? [];
-
-    const parsed: NearbyPlace[] = elements
-      .map((el) => parseOsmElement(el))
-      .filter((p): p is NearbyPlace => p !== null);
-
-    // Deduplicate by name within ~100 m grid cell
-    const seen = new Set<string>();
-    const deduped = parsed.filter((p) => {
-      const key = `${p.name.toLowerCase()}|${Math.round(p.geometry.location.lat / 0.001)}|${Math.round(p.geometry.location.lng / 0.001)}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
-    // Sort closest first
-    deduped.sort((a, b) => {
-      const dA = (a.geometry.location.lat - userLat) ** 2 + (a.geometry.location.lng - userLon) ** 2;
-      const dB = (b.geometry.location.lat - userLat) ** 2 + (b.geometry.location.lng - userLon) ** 2;
-      return dA - dB;
-    });
-
-    return deduped;
-  } catch (err) {
-    console.error("Overpass fetch error:", err);
-    return [];
   }
+
+  console.error("All Overpass mirrors failed.");
+  return [];
 }
 
+
+// ── Wait time estimator ───────────────────────────────────────────────────────
+// No free real-time API exists for facility wait times.
+// Estimate using: base wait by type + time-of-day curve + day-of-week + stable
+// per-facility hash so each place has a consistent offset within a session.
+const BASE_WAIT: Record<FilterKey, number> = {
+  all: 30,
+  hospital: 110,
+  clinic: 38,
+  pharmacy: 10,
+  doctors: 22,
+  dentist: 14,
+};
+
+function estimateWaitMinutes(place: NearbyPlace): number {
+  const base = BASE_WAIT[place.amenity] ?? 30;
+
+  const hour = new Date().getHours();
+  const day  = new Date().getDay(); // 0=Sun
+
+  const timeMultiplier =
+    hour >= 9  && hour < 11 ? 1.55 :  // morning rush
+    hour >= 11 && hour < 13 ? 1.30 :  // pre-lunch
+    hour >= 17 && hour < 19 ? 1.45 :  // after-work rush
+    hour >= 7  && hour < 9  ? 0.80 :  // early morning
+    hour >= 19 || hour < 7  ? 0.55 :  // evening / closed-ish
+    1.0;
+
+  const dayMultiplier =
+    day === 1 ? 1.30 :  // Monday (post-weekend backlog)
+    day === 5 ? 1.10 :  // Friday
+    day === 0 || day === 6 ? 0.80 :
+    1.0;
+
+  // Stable per-facility jitter (±20%) derived from place_id
+  let hash = 0;
+  for (const c of place.place_id) hash = (hash * 31 + c.charCodeAt(0)) & 0xffff;
+  const jitter = 0.82 + (hash % 100) / 265;
+
+  return Math.max(5, Math.round(base * timeMultiplier * dayMultiplier * jitter));
+}
+
+function formatWait(mins: number): string {
+  if (mins < 60) return `~${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m > 0 ? `~${h}h ${m}m` : `~${h}h`;
+}
+
+function waitColor(mins: number): string {
+  if (mins <= 15) return "#16A34A";
+  if (mins <= 45) return "#D97706";
+  return "#DC2626";
+}
 
 // ── Distance helper ───────────────────────────────────────────────────────────
 function distanceMiles(
@@ -325,31 +398,30 @@ export default function HomeScreen() {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [avatarInitials, setAvatarInitials] = useState<string>("");
 
-  // Force dark (light-icon) status bar every time this screen gains focus,
-  // overriding whatever another screen may have set while we were away.
+  // Re-runs every time this screen gains focus:
+  // 1. Forces the dark status bar back (in case another screen changed it)
+  // 2. Re-fetches the avatar so changes made in profile screen show immediately
   useFocusEffect(
     useCallback(() => {
       setStatusBarStyle("light");
+
+      supabase.auth.getUser().then(({ data: { user } }) => {
+        if (!user) return;
+        supabase
+          .from("profiles")
+          .select("avatar_url, first_name, last_name")
+          .eq("id", user.id)
+          .single()
+          .then(({ data }) => {
+            if (!data) return;
+            setAvatarUrl(data.avatar_url ?? null);
+            const initials =
+              (data.first_name?.[0] ?? "") + (data.last_name?.[0] ?? "");
+            setAvatarInitials(initials.toUpperCase());
+          });
+      });
     }, []),
   );
-
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) return;
-      supabase
-        .from("profiles")
-        .select("avatar_url, first_name, last_name")
-        .eq("id", user.id)
-        .single()
-        .then(({ data }) => {
-          if (!data) return;
-          setAvatarUrl(data.avatar_url ?? null);
-          const initials =
-            (data.first_name?.[0] ?? "") + (data.last_name?.[0] ?? "");
-          setAvatarInitials(initials.toUpperCase());
-        });
-    });
-  }, []);
 
   // ── Bottom-sheet animation (translateY, native driver) ────────────────────
   const translateY = useRef(new Animated.Value(SNAP_COLLAPSED)).current;
@@ -528,15 +600,26 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* Address */}
-        {item.vicinity !== "Address unavailable" && (
-          <View style={styles.listDetailRow}>
-            <MaterialIcons name="location-on" size={13} color="#94A3B8" />
-            <Text style={styles.listDetailText} numberOfLines={2}>
-              {item.vicinity}
-            </Text>
-          </View>
-        )}
+        {/* Wait time + address row */}
+        <View style={styles.listMeta}>
+          {(() => {
+            const mins = estimateWaitMinutes(item);
+            const color = waitColor(mins);
+            return (
+              <View style={[styles.waitBadge, { backgroundColor: color + "1A", borderColor: color + "55" }]}>
+                <MaterialIcons name="schedule" size={12} color={color} />
+                <Text style={[styles.waitText, { color }]}>{formatWait(mins)}</Text>
+                <Text style={[styles.waitLabel, { color }]}>est. wait</Text>
+              </View>
+            );
+          })()}
+          {item.vicinity !== "Address unavailable" && (
+            <View style={styles.listDetailRow}>
+              <MaterialIcons name="location-on" size={12} color="#94A3B8" />
+              <Text style={styles.listDetailText} numberOfLines={1}>{item.vicinity}</Text>
+            </View>
+          )}
+        </View>
 
         {/* Get More Info button */}
         <TouchableOpacity
@@ -1073,17 +1156,44 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     textTransform: "capitalize",
   },
+  listMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 10,
+    marginBottom: 2,
+    flexWrap: "wrap",
+  },
+  waitBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  waitText: {
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  waitLabel: {
+    fontSize: 11,
+    fontWeight: "500",
+    opacity: 0.8,
+  },
   listDetailRow: {
     flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 6,
-    marginTop: 8,
+    alignItems: "center",
+    gap: 4,
+    flex: 1,
+    minWidth: 0,
   },
   listDetailText: {
-    fontSize: 13,
+    fontSize: 12,
     color: "#64748B",
     flex: 1,
-    lineHeight: 18,
+    lineHeight: 16,
   },
 
   moreInfoBtn: {
