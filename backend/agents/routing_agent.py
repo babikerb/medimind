@@ -35,7 +35,6 @@ def haversine_distance(lat1, lon1, lat2, lon2) -> float:
     a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
     return R * 2 * math.asin(math.sqrt(a))
 
-
 def get_capacity_snapshot(hospital_id: str, department: str) -> dict:
     """Get latest capacity snapshot for a hospital department."""
     try:
