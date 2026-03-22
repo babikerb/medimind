@@ -1,4 +1,5 @@
 import { MaterialIcons } from "@expo/vector-icons";
+import { useIsFocused } from "@react-navigation/native"; // Ensure this is installed
 import * as Location from "expo-location";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useRef, useState } from "react";
@@ -19,6 +20,8 @@ const APP_BG_COLOR = "#0f172a";
 
 export default function HomeScreen() {
   const mapRef = useRef<MapView>(null);
+  const isFocused = useIsFocused(); // Tracks if this screen is currently active
+
   const [location, setLocation] = useState<Location.LocationObject | null>(
     null,
   );
@@ -52,9 +55,36 @@ export default function HomeScreen() {
     );
   };
 
+  // ZOOM LOGIC
+  const handleZoom = (type: "in" | "out") => {
+    mapRef.current?.getCamera().then((cam) => {
+      if (cam.zoom !== undefined) {
+        cam.zoom += type === "in" ? 1 : -1;
+        mapRef.current?.animateCamera(cam);
+      } else {
+        // Fallback for providers that don't support camera zoom directly
+        mapRef.current?.animateToRegion({
+          latitude: cam.center.latitude,
+          longitude: cam.center.longitude,
+          latitudeDelta: type === "in" ? 0.005 : 0.05,
+          longitudeDelta: type === "in" ? 0.005 : 0.05,
+        });
+      }
+    });
+  };
+
   return (
     <View style={styles.container}>
-      <StatusBar style="dark" backgroundColor="#0f172a" />
+      {/* The 'isFocused' check forces the StatusBar to re-apply 
+         "dark" (black text) every time you navigate back to this screen.
+      */}
+      {isFocused && (
+        <StatusBar
+          style="dark"
+          backgroundColor="transparent"
+          translucent={true}
+        />
+      )}
 
       {location ? (
         <MapView
@@ -76,7 +106,7 @@ export default function HomeScreen() {
         </View>
       )}
 
-      {/* Control Group - Layers removed, Location moved up */}
+      {/* Control Group - Location and Zoom */}
       <View style={styles.controlsContainer}>
         <TouchableOpacity
           style={styles.controlButton}
@@ -87,6 +117,22 @@ export default function HomeScreen() {
           activeOpacity={0.7}
         >
           <MaterialIcons name="my-location" size={26} color="#7C3AED" />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.controlButton, { marginTop: 12 }]}
+          onPress={() => handleZoom("in")}
+          activeOpacity={0.7}
+        >
+          <MaterialIcons name="add" size={26} color="#7C3AED" />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.controlButton, { marginTop: 12 }]}
+          onPress={() => handleZoom("out")}
+          activeOpacity={0.7}
+        >
+          <MaterialIcons name="remove" size={26} color="#7C3AED" />
         </TouchableOpacity>
       </View>
 
@@ -118,11 +164,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: APP_BG_COLOR,
   },
-
   controlsContainer: {
     position: "absolute",
     right: 16,
-    top: height * 0.15,
+    top: height * 0.15, // Starts below the search bar
   },
   controlButton: {
     backgroundColor: "#FFFFFF",
@@ -137,7 +182,6 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 5,
   },
-
   searchContainer: {
     position: "absolute",
     top: Platform.OS === "ios" ? 60 : 50,
