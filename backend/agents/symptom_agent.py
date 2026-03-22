@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+ASI1_API_KEY = os.getenv("ASI1_API_KEY")
 
 symptom_agent = Agent(
     name="symptom_agent",
@@ -25,15 +25,15 @@ from agents.models import (
 symptom_protocol = Protocol("SymptomProtocol")
 
 
-def call_groq(system_prompt: str, user_message: str) -> str:
+def call_asi1(system_prompt: str, user_message: str) -> str:
     response = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
+        "https://api.asi1.ai/v1/chat/completions",
         headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Authorization": f"Bearer {ASI1_API_KEY}",
             "Content-Type": "application/json"
         },
         json={
-            "model": "llama-3.3-70b-versatile",
+            "model": "asi1-mini",
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
@@ -74,7 +74,7 @@ Example: ["How long have you had this pain?", "Is the pain sharp or dull?"]"""
     user_message = build_profile_context(msg.patient_profile or {}) + f"Symptoms: {msg.symptom_input}"
 
     try:
-        raw = call_groq(system_prompt, user_message)
+        raw = call_asi1(system_prompt, user_message)
         raw = raw.replace("```json", "").replace("```", "").strip()
         questions = json.loads(raw)
         if questions and isinstance(questions[0], dict):
@@ -132,7 +132,7 @@ Respond ONLY with valid JSON, no markdown:
     )
 
     try:
-        raw = call_groq(system_prompt, user_message)
+        raw = call_asi1(system_prompt, user_message)
         raw = raw.replace("```json", "").replace("```", "").strip()
         triage = json.loads(raw)
     except Exception as e:
