@@ -223,7 +223,13 @@ async def handle_routing_request(ctx: Context, sender: str, msg: RoutingRequest)
         ))
 
     except Exception as e:
-        ctx.logger.error(f"[RoutingAgent] Error: {e}")
+            ctx.logger.error(f"[RoutingAgent] Error: {e}")
+            await ctx.send(sender, GatewayTriageResponse(
+                user_id=msg.user_id,
+                triage=triage,
+                recommended_hospitals=[],
+                session_id="error"
+            ))
 
 
 routing_agent.include(routing_protocol, publish_manifest=True)
