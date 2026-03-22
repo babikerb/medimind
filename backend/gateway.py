@@ -123,8 +123,10 @@ def score_hospital(hospital, triage, user_lat, user_lon, insurance=None):
 @app.get("/health")
 def health_check():
     return {"status": "ok", "agents": {
-        "symptom_agent": SYMPTOM_AGENT_ADDRESS,
-        "routing_agent": ROUTING_AGENT_ADDRESS
+        "symptom_agent": os.getenv("SYMPTOM_AGENT_ADDRESS"),
+        "routing_agent": os.getenv("ROUTING_AGENT_ADDRESS"),
+        "monitor_agent": os.getenv("MONITOR_AGENT_ADDRESS"),
+        "alert_agent": os.getenv("ALERT_AGENT_ADDRESS")
     }}
 
 
