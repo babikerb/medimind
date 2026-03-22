@@ -1,3 +1,4 @@
+import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useState } from "react";
@@ -28,11 +29,11 @@ export default function LoginScreen() {
 
   useEffect(() => {
     const showSubscription = Keyboard.addListener("keyboardWillShow", () => {
-      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      LayoutAnimation.configureNext({ duration: 260, update: { type: LayoutAnimation.Types.spring, springDamping: 0.85 }, create: { type: LayoutAnimation.Types.spring, property: LayoutAnimation.Properties.opacity, springDamping: 0.85 } });
       setKeyboardVisible(true);
     });
     const hideSubscription = Keyboard.addListener("keyboardWillHide", () => {
-      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      LayoutAnimation.configureNext({ duration: 260, update: { type: LayoutAnimation.Types.spring, springDamping: 0.85 }, create: { type: LayoutAnimation.Types.spring, property: LayoutAnimation.Properties.opacity, springDamping: 0.85 } });
       setKeyboardVisible(false);
     });
 
@@ -67,15 +68,15 @@ export default function LoginScreen() {
       <SafeAreaView style={styles.container}>
         <StatusBar style="light" />
 
-        {/* Top Navigation - Smooth Fade/Slide */}
+        {/* Top nav */}
         <View style={styles.topNav}>
           {!isKeyboardVisible && (
             <TouchableOpacity
-              style={styles.backButton}
+              style={styles.headerIconBtn}
               onPress={() => router.back()}
               activeOpacity={0.7}
             >
-              <Text style={styles.backButtonText}>BACK</Text>
+              <MaterialIcons name="arrow-back" size={18} color="#94A3B8" />
             </TouchableOpacity>
           )}
         </View>
@@ -169,10 +170,22 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0F172A" },
   flex: { flex: 1 },
   topNav: {
-    paddingHorizontal: 28,
-    paddingTop: Platform.OS === "android" ? 40 : 10,
-    height: 60,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    height: 56,
+    justifyContent: "flex-start",
+    borderBottomWidth: 1,
+    borderBottomColor: "#334155",
+  },
+  headerIconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: "#1E293B",
+    borderWidth: 1,
+    borderColor: "#334155",
     justifyContent: "center",
+    alignItems: "center",
   },
   inner: {
     flex: 1,
@@ -228,36 +241,16 @@ const styles = StyleSheet.create({
   },
   loginButton: {
     backgroundColor: "#7C3AED",
-    height: 58,
-    borderRadius: 18,
+    height: 54,
+    borderRadius: 16,
     justifyContent: "center",
     alignItems: "center",
-    shadowColor: "#7C3AED",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 4,
   },
-  buttonDisabled: { opacity: 0.7 },
-  loginButtonText: { color: "#FFFFFF", fontSize: 18, fontWeight: "700" },
+  buttonDisabled: { opacity: 0.5 },
+  loginButtonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
   footer: {
     alignItems: "center",
     marginTop: 32,
-  },
-  backButton: {
-    alignSelf: "flex-start",
-    backgroundColor: "rgba(30, 41, 59, 0.8)",
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 100,
-    borderWidth: 1,
-    borderColor: "#334155",
-  },
-  backButtonText: {
-    color: "#94A3B8",
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1,
   },
   footerText: {
     color: "#64748B",

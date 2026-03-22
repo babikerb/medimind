@@ -47,7 +47,6 @@ type Profile = {
   first_name: string;
   last_name: string;
   avatar_url: string | null;
-  zip_code: string;
   insurance_provider: string;
   insurance_plan: string;
   dob: string;
@@ -212,7 +211,6 @@ export default function ProfileScreen() {
         dob: draft.dob,
         gender: draft.gender,
         language: draft.language,
-        zip_code: draft.zip_code,
         insurance_provider: finalProvider,
         insurance_plan: draft.insurance_plan,
         avatar_url: draft.avatar_url,
@@ -346,18 +344,6 @@ export default function ProfileScreen() {
           onBlur={() => setFocusedInput(null)}
         />
 
-        {/* ZIP Code */}
-        <FieldLabel text="ZIP CODE" />
-        <InputBox
-          label="ZIP Code"
-          value={draft?.zip_code ?? ""}
-          onChange={(t) => setDraftField("zip_code", t)}
-          focused={focusedInput === "zip"}
-          onFocus={() => setFocusedInput("zip")}
-          onBlur={() => setFocusedInput(null)}
-          keyboardType="numeric"
-        />
-
         {/* Insurance Provider */}
         <FieldLabel text="INSURANCE PROVIDER" />
         <View style={styles.pickerWrapper}>
@@ -456,8 +442,6 @@ export default function ProfileScreen() {
         <InfoCard label="Gender" value={profile?.gender ?? ""} iconName="person-outline" />
         <View style={styles.divider} />
         <InfoCard label="Language" value={profile?.language ?? ""} iconName="language" />
-        <View style={styles.divider} />
-        <InfoCard label="ZIP Code" value={profile?.zip_code ?? ""} iconName="location-on" />
       </View>
 
       <SectionHeader title="INSURANCE" />
@@ -481,17 +465,18 @@ export default function ProfileScreen() {
       {/* Nav */}
       <View style={styles.topNav}>
         <TouchableOpacity
+          style={styles.headerIconBtn}
           onPress={editing ? cancelEditing : () => router.back()}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          activeOpacity={0.7}
         >
-          <MaterialIcons name={editing ? "close" : "arrow-back"} size={24} color="#fff" />
+          <MaterialIcons name={editing ? "close" : "arrow-back"} size={18} color="#94A3B8" />
         </TouchableOpacity>
-        <Text style={styles.navTitle}>{editing ? "EDIT PROFILE" : "PROFILE"}</Text>
+        <Text style={styles.navTitle}>{editing ? "Edit Profile" : "Profile"}</Text>
         {editing ? (
-          <View style={{ width: 24 }} />
+          <View style={{ width: 32 }} />
         ) : (
-          <TouchableOpacity onPress={startEditing} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <MaterialIcons name="edit" size={22} color="#A78BFA" />
+          <TouchableOpacity style={styles.headerIconBtn} onPress={startEditing} activeOpacity={0.7}>
+            <MaterialIcons name="edit" size={16} color="#94A3B8" />
           </TouchableOpacity>
         )}
       </View>
@@ -504,7 +489,7 @@ export default function ProfileScreen() {
           <View style={styles.skeletonEmail} />
           <View style={styles.skeletonSection} />
           <View style={styles.skeletonCard}>
-            {[0, 1, 2, 3].map((i) => (
+            {[0, 1, 2].map((i) => (
               <View key={i} style={styles.skeletonRow}>
                 <View style={styles.skeletonIcon} />
                 <View style={{ flex: 1, gap: 6 }}>
@@ -535,15 +520,26 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0F172A" },
   topNav: {
-    paddingHorizontal: 20,
-    paddingTop: Platform.OS === "android" ? 40 : 10,
-    height: 60,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    borderBottomWidth: 1,
+    borderBottomColor: "#334155",
   },
-  navTitle: { color: "#FFFFFF", fontSize: 13, fontWeight: "900", letterSpacing: 4 },
-  scrollContent: { paddingHorizontal: 28, paddingBottom: 48 },
+  navTitle: { color: "#FFFFFF", fontSize: 15, fontWeight: "800", letterSpacing: 0.2 },
+  headerIconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: "#1E293B",
+    borderWidth: 1,
+    borderColor: "#334155",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  scrollContent: { paddingHorizontal: 24, paddingBottom: 48 },
 
   // ── View mode ──
   heroSection: { alignItems: "center", marginTop: 16, marginBottom: 36 },
@@ -584,11 +580,11 @@ const styles = StyleSheet.create({
   },
   infoValue: { color: "#FFFFFF", fontSize: 16, fontWeight: "600" },
   logoutButton: {
-    flexDirection: "row", backgroundColor: "transparent", height: 58,
-    borderRadius: 18, justifyContent: "center", alignItems: "center",
+    flexDirection: "row", backgroundColor: "transparent", height: 54,
+    borderRadius: 16, justifyContent: "center", alignItems: "center",
     borderWidth: 1, borderColor: "#7F1D1D", marginBottom: 32,
   },
-  logoutButtonText: { color: "#F87171", fontSize: 16, fontWeight: "700", letterSpacing: 1 },
+  logoutButtonText: { color: "#F87171", fontSize: 15, fontWeight: "700" },
 
   // ── Edit mode ──
   editForm: { paddingTop: 8 },
@@ -662,10 +658,10 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: "#334155", overflow: "hidden",
   },
   saveButton: {
-    backgroundColor: "#7C3AED", height: 58, borderRadius: 18,
+    backgroundColor: "#7C3AED", height: 54, borderRadius: 16,
     justifyContent: "center", alignItems: "center", marginTop: 8, marginBottom: 32,
   },
-  saveButtonText: { color: "#FFFFFF", fontSize: 18, fontWeight: "700" },
+  saveButtonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
 
   // ── Skeleton ──
   loadingScreen: { flex: 1, paddingHorizontal: 28, paddingTop: 20 },

@@ -1,7 +1,7 @@
+import { MaterialIcons } from "@expo/vector-icons";
 import { Picker } from "@react-native-picker/picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
-import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useState } from "react";
@@ -94,7 +94,6 @@ export default function MultiStepSignUp() {
   const router = useRouter();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [locLoading, setLocLoading] = useState(false);
   const [focusedInput, setFocusedInput] = useState<string | null>(null);
 
   const [isDatePickerVisible, setDatePickerVisibility] = useState(false);
@@ -107,7 +106,6 @@ export default function MultiStepSignUp() {
     email: "",
     password: "",
     avatar_url: "",
-    zipCode: "",
     insuranceProvider: "",
     customProvider: "",
     insurancePlan: "",
@@ -142,31 +140,6 @@ export default function MultiStepSignUp() {
     setFormData((prev) => ({ ...prev, [key]: value }));
   };
 
-  const handleGetLocation = async () => {
-    setLocLoading(true);
-    try {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert("Permission denied", "Allow location access to autofill.");
-        return;
-      }
-      let location = await Location.getCurrentPositionAsync({});
-      let reverseGeocode = await Location.reverseGeocodeAsync({
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-      });
-      if (reverseGeocode.length > 0 && reverseGeocode[0].postalCode) {
-        updateForm("zipCode", reverseGeocode[0].postalCode);
-      } else {
-        Alert.alert("Notice", "Could not find a specific zip code.");
-      }
-    } catch (err) {
-      Alert.alert("Error", "Failed to get location.");
-    } finally {
-      setLocLoading(false);
-    }
-  };
-
   const pickImage = async () => {
     let result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -194,13 +167,20 @@ export default function MultiStepSignUp() {
     setDatePickerVisibility(false);
   };
 
+  const stepTransition = {
+    duration: 280,
+    create: { type: LayoutAnimation.Types.spring, property: LayoutAnimation.Properties.opacity, springDamping: 0.82 },
+    update: { type: LayoutAnimation.Types.spring, springDamping: 0.82 },
+    delete: { type: LayoutAnimation.Types.spring, property: LayoutAnimation.Properties.opacity, springDamping: 0.82 },
+  };
+
   const nextStep = () => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    LayoutAnimation.configureNext(stepTransition);
     setStep(step + 1);
   };
 
   const prevStep = () => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    LayoutAnimation.configureNext(stepTransition);
     setStep(step - 1);
   };
 
@@ -231,7 +211,6 @@ export default function MultiStepSignUp() {
         first_name: formData.firstName,
         last_name: formData.lastName,
         avatar_url: formData.avatar_url,
-        zip_code: formData.zipCode,
         insurance_provider: finalProvider,
         insurance_plan: formData.insurancePlan,
         dob: formData.dob,
@@ -284,7 +263,7 @@ export default function MultiStepSignUp() {
         return (
           <View style={styles.stepContainer}>
             <Text style={styles.brandName}>STEP 2</Text>
-            <Text style={styles.title}>Security</Text>
+            <Text style={styles.title}>Account</Text>
             <InputBox
               label="Email Address"
               value={formData.email}
@@ -341,33 +320,6 @@ export default function MultiStepSignUp() {
         return (
           <View style={styles.stepContainer}>
             <Text style={styles.brandName}>STEP 4</Text>
-            <Text style={styles.title}>Location</Text>
-            <InputBox
-              label="ZIP Code"
-              value={formData.zipCode}
-              onChange={(v: string) => updateForm("zipCode", v)}
-              id="zip"
-              keyboardType="numeric"
-              focusedInput={focusedInput}
-              setFocusedInput={setFocusedInput}
-            />
-            <PrimaryButton
-              text={locLoading ? "Locating..." : "Use Current Location"}
-              onPress={handleGetLocation}
-              style={{ backgroundColor: "#334155", marginBottom: 12 }}
-              loading={locLoading}
-            />
-            <PrimaryButton
-              text="Continue"
-              onPress={nextStep}
-              disabled={!formData.zipCode}
-            />
-          </View>
-        );
-      case 5:
-        return (
-          <View style={styles.stepContainer}>
-            <Text style={styles.brandName}>STEP 5</Text>
             <Text style={styles.title}>Insurance</Text>
             <View style={styles.pickerWrapper}>
               <Picker
@@ -415,16 +367,17 @@ export default function MultiStepSignUp() {
             />
           </View>
         );
-      case 6:
+      case 5:
         return (
           <View style={styles.stepContainer}>
-            <Text style={styles.brandName}>STEP 6</Text>
+            <Text style={styles.brandName}>STEP 5</Text>
             <Text style={styles.title}>Basic Info</Text>
+            <Text style={styles.brandName}>BIRTHDAY</Text>
             <TouchableOpacity onPress={() => setDatePickerVisibility(true)}>
               <View pointerEvents="none">
                 <InputBox
-                  label="Birthday"
-                  value={formData.dob || "Select Date"}
+                  label="Select Date"
+                  value={formData.dob || ""}
                   id="dob"
                   editable={false}
                 />
@@ -471,10 +424,10 @@ export default function MultiStepSignUp() {
             />
           </View>
         );
-      case 7:
+      case 6:
         return (
           <View style={styles.stepContainer}>
-            <Text style={styles.brandName}>STEP 7</Text>
+            <Text style={styles.brandName}>STEP 6</Text>
             <Text style={styles.title}>Language</Text>
             <InputBox
               label="Preferred Language"
@@ -487,7 +440,7 @@ export default function MultiStepSignUp() {
             <PrimaryButton text="Review Details" onPress={nextStep} />
           </View>
         );
-      case 8:
+      case 7:
         return (
           <View style={styles.stepContainer}>
             <Text style={styles.brandName}>FINAL STEP</Text>
@@ -498,7 +451,6 @@ export default function MultiStepSignUp() {
                 value={`${formData.firstName} ${formData.lastName}`}
               />
               <ReviewRow label="Email" value={formData.email} />
-              <ReviewRow label="Zip Code" value={formData.zipCode} />
               <ReviewRow
                 label="Insurance"
                 value={`${isOtherProvider ? formData.customProvider : formData.insuranceProvider} (${formData.insurancePlan})`}
@@ -525,16 +477,19 @@ export default function MultiStepSignUp() {
         <StatusBar style="light" />
         <View style={styles.topNav}>
           <TouchableOpacity
-            style={styles.backButton}
+            style={styles.headerIconBtn}
             onPress={step === 1 ? () => router.back() : prevStep}
+            activeOpacity={0.7}
           >
-            <Text style={styles.backButtonText}>
-              {step === 1 ? "CANCEL" : "BACK"}
-            </Text>
+            <MaterialIcons
+              name={step === 1 ? "close" : "arrow-back"}
+              size={18}
+              color="#94A3B8"
+            />
           </TouchableOpacity>
           <View style={styles.progressBar}>
             <View
-              style={[styles.progressFill, { width: `${(step / 8) * 100}%` }]}
+              style={[styles.progressFill, { width: `${(step / 7) * 100}%` }]}
             />
           </View>
         </View>
@@ -555,11 +510,23 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0F172A" },
   flex: { flex: 1 },
   topNav: {
-    paddingHorizontal: 28,
-    paddingTop: Platform.OS === "android" ? 40 : 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     flexDirection: "row",
     alignItems: "center",
-    height: 60,
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#334155",
+  },
+  headerIconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: "#1E293B",
+    borderWidth: 1,
+    borderColor: "#334155",
+    justifyContent: "center",
+    alignItems: "center",
   },
   inner: {
     flexGrow: 1,
@@ -604,22 +571,14 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     backgroundColor: "#7C3AED",
-    height: 58,
-    borderRadius: 18,
+    height: 54,
+    borderRadius: 16,
     justifyContent: "center",
     alignItems: "center",
     marginTop: 10,
   },
-  primaryButtonText: { color: "#FFFFFF", fontSize: 18, fontWeight: "700" },
+  primaryButtonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
   buttonDisabled: { opacity: 0.5 },
-  backButton: {
-    backgroundColor: "rgba(30, 41, 59, 0.8)",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 100,
-    marginRight: 16,
-  },
-  backButtonText: { color: "#94A3B8", fontSize: 10, fontWeight: "700" },
   progressBar: {
     flex: 1,
     height: 4,
