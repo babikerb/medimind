@@ -1,20 +1,3 @@
-"""
-FALLBACK: gateway_rest.py — Uses on_rest_post (custom REST endpoints) instead of query().
-
-If query() + on_message through Bureau doesn't work, this approach bypasses
-the uAgents messaging protocol entirely and uses plain HTTP POST requests
-to custom REST endpoints defined on each agent with @agent.on_rest_post().
-
-This requires adding on_rest_post handlers to your agents (see symptom_agent_rest.py).
-
-The trade-off: you lose the uAgents envelope/signing/addressing system,
-but you get reliable synchronous HTTP request/response that definitely works.
-
-For a hackathon, this is totally fine — you're still running fetch.ai agents,
-they still communicate with each other via on_message for internal flows,
-and the gateway just uses REST to kick things off.
-"""
-
 import os
 import json
 import httpx
@@ -93,7 +76,7 @@ async def submit_triage(payload: FollowUpAnswersPayload):
     """Call SymptomAgent for triage, then RoutingAgent for hospital ranking."""
     async with httpx.AsyncClient(timeout=30) as client:
         try:
-            # Step 1 — Triage via SymptomAgent REST
+            # Step 1 Triage via SymptomAgent REST
             triage_resp = await client.post(
                 f"{BUREAU_BASE}/rest/symptom/triage",
                 json={
@@ -108,7 +91,7 @@ async def submit_triage(payload: FollowUpAnswersPayload):
             triage_data = triage_resp.json()
             triage = triage_data.get("triage", triage_data)
 
-            # Step 2 — Routing via RoutingAgent REST
+            # Step 2 Routing via RoutingAgent REST
             routing_resp = await client.post(
                 f"{BUREAU_BASE}/rest/routing/rank",
                 json={
