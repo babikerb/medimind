@@ -43,6 +43,7 @@ export default function RootLayout() {
     if (loading) return;
 
     const inAuthGroup = segments[0] === "(auth)";
+    const inTabsGroup = segments[0] === "(tabs)";
 
     if (session && inAuthGroup) {
       router.replace("/(tabs)");
@@ -72,6 +73,7 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(auth)/welcome" />
         <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="diagnose" />
         <Stack.Screen name="modal" options={{ presentation: "modal" }} />
       </Stack>
     </ThemeProvider>

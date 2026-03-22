@@ -4,7 +4,7 @@
     "slug": "medimind",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "../medimind/assets/images/medimind.png",
     "scheme": "medimind",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,

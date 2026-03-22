@@ -6,7 +6,7 @@ export default ({ config }) => ({
   slug: config.slug || "my-supabase-app",
   version: config.version || "1.0.0",
   orientation: "portrait",
-  icon: "./assets/icon.png",
+  icon: "../medimind/assets/images/medimind.png",
   userInterfaceStyle: "light",
   splash: {
     image: "./assets/splash.png",
