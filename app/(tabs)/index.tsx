@@ -71,8 +71,6 @@ interface NearbyPlace {
   wikidataId?: string;
   open_now?: boolean;
   hours_display?: string;
-  isMockPhone?: boolean;
-  isMockHours?: boolean;
   geometry: { location: { lat: number; lng: number } };
   amenity: FilterKey;
   detailsFetched: boolean;
@@ -947,14 +945,7 @@ async function fetchNpiPhones(
   return result;
 }
 
-// ── Google Search scraper (no API key) ───────────────────────────────────────
-// Fetches the Google SERP for "<name> <address>" and extracts:
-//   • Phone  — from the knowledge-panel "Call" tel: link (very stable)
-//   • Hours  — from JSON-LD if present, then from day-name / time-range patterns
-//              in the knowledge panel table
-// Requests are made sequentially with a delay so Google doesn't rate-limit us.
-
-// Decode HTML character entities so regex patterns match rendered text
+// ── Decode HTML character entities (used by fetchSchemaOrgData) ───────────────
 function decodeHtmlEntities(s: string): string {
   return s
     .replace(/&#8239;/g, " ")   // narrow no-break space (Google wraps times with this)
@@ -969,159 +960,6 @@ function decodeHtmlEntities(s: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&#\d+;/g, " ")    // remaining numeric entities
     .replace(/&[a-z]{2,6};/g, " "); // remaining named entities
-}
-
-// ── Shared HTML scrape helper ─────────────────────────────────────────────────
-async function scrapeHtml(url: string, tag: string): Promise<string | null> {
-  try {
-    const res = await Promise.race([
-      fetch(url, {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-          "Accept": "text/html,application/xhtml+xml",
-          "Accept-Language": "en-US,en;q=0.9",
-          "Accept-Encoding": "identity",
-        },
-      }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 10000)),
-    ]);
-    console.log(`[${tag}] ${res.status} ${res.url} (${res.headers.get("content-type") ?? "?"})`);
-    if (!res.ok) return null;
-    const html = await res.text();
-    console.log(`[${tag}] HTML length: ${html.length}`);
-    return html;
-  } catch (e: any) {
-    console.log(`[${tag}] fetch error: ${e?.message}`);
-    return null;
-  }
-}
-
-function extractPhone(html: string, tag: string): string | undefined {
-  // tel: href (most reliable — used by both Bing and YP for the call button)
-  const m = html.match(/href=["']tel:([^"']{7,20})["']/);
-  if (m?.[1]) {
-    const p = formatPhone(decodeURIComponent(m[1]));
-    console.log(`[${tag}] phone via tel: href → ${p}`);
-    return p;
-  }
-  // Fallback: bare US phone number in the HTML (e.g. YP renders "(310) 555-1234")
-  const m2 = html.match(/\((\d{3})\)\s*(\d{3})-(\d{4})/);
-  if (m2) {
-    const p = `(${m2[1]}) ${m2[2]}-${m2[3]}`;
-    console.log(`[${tag}] phone via bare number → ${p}`);
-    return p;
-  }
-  console.log(`[${tag}] no phone found`);
-  return undefined;
-}
-
-function extractHoursFromHtml(html: string, tag: string): string | undefined {
-  const decoded = decodeHtmlEntities(html);
-
-  // JSON-LD (Bing and YP both sometimes include structured data)
-  const jldRe = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
-  let jm: RegExpExecArray | null;
-  while ((jm = jldRe.exec(html)) !== null) {
-    try {
-      const root = JSON.parse(jm[1]);
-      const nodes: any[] = Array.isArray(root) ? root : root["@graph"] ? root["@graph"] : [root];
-      for (const node of nodes) {
-        if (typeof node.openingHours === "string") {
-          console.log(`[${tag}] hours via JSON-LD string`);
-          return node.openingHours;
-        }
-        if (Array.isArray(node.openingHours)) {
-          console.log(`[${tag}] hours via JSON-LD array`);
-          return node.openingHours.join("; ");
-        }
-        if (node.openingHoursSpecification) {
-          const h = specToOsm(node.openingHoursSpecification);
-          if (h) { console.log(`[${tag}] hours via JSON-LD spec`); return h; }
-        }
-      }
-    } catch {}
-  }
-
-  // itemprop="openingHours" microdata
-  const microMatch =
-    decoded.match(/itemprop=["']openingHours["'][^>]*content=["']([^"']+)["']/i) ??
-    decoded.match(/content=["']([^"']+)["'][^>]*itemprop=["']openingHours["']/i);
-  if (microMatch?.[1]) {
-    console.log(`[${tag}] hours via itemprop microdata`);
-    return microMatch[1];
-  }
-
-  // Strip HTML tags so day + time aren't split across elements (e.g. <td>Monday</td><td>9 AM</td>)
-  const stripped = decoded.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
-
-  // Full and abbreviated day names, AM/PM and 24h formats, "Closed", "Open 24 hours"
-  const DAY_RE =
-    /(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Wed|Thu|Fri|Sat|Sun)[\s:]*(?:\d{1,2}(?::\d{2})?\s*(?:AM|PM)\s*[-–—]\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM)|\d{2}:\d{2}\s*[-–—]\s*\d{2}:\d{2}|Open 24 hours|24 hours|Closed)/gi;
-  const seen = new Set<string>();
-  const matches: string[] = [];
-  let dm: RegExpExecArray | null;
-  DAY_RE.lastIndex = 0;
-  while ((dm = DAY_RE.exec(stripped)) !== null) {
-    const key = dm[0].split(/[\s:]/)[0].toLowerCase().substring(0, 3);
-    if (!seen.has(key)) { seen.add(key); matches.push(dm[0]); }
-  }
-  console.log(`[${tag}] day matches (${matches.length}): ${matches.slice(0, 3).join(" | ")}`);
-  if (matches.length >= 3) return matches.map((d) => normalizeToOsmHours(d)).join("; ");
-
-  // Log context around "Monday" for debugging
-  const idx = stripped.indexOf("Monday");
-  if (idx !== -1) {
-    console.log(`[${tag}] Monday ctx: "${stripped.substring(idx, idx + 100)}"`);
-  } else {
-    console.log(`[${tag}] "Monday" not found`);
-  }
-  return undefined;
-}
-
-// ── Bing search scraper ───────────────────────────────────────────────────────
-// Bing renders its local-business knowledge panel server-side (needed for SEO),
-// so the phone number and hours are present in the initial HTML response.
-async function fetchBingData(
-  name: string,
-  addressLine: string,
-): Promise<{ phone?: string; hours?: string } | null> {
-  const q = `${name} ${addressLine}`.trim();
-  console.log(`[Bing] query: "${q}"`);
-  const url = `https://www.bing.com/search?q=${encodeURIComponent(q)}&mkt=en-US&setlang=en-US`;
-  const raw = await scrapeHtml(url, "Bing");
-  if (!raw || raw.length < 5000) return null;
-
-  const phone = extractPhone(raw, "Bing");
-  const hours = extractHoursFromHtml(raw, "Bing");
-  console.log(`[Bing] result: phone=${phone ?? "—"} hours=${hours ? hours.slice(0, 40) : "—"}`);
-  return phone || hours ? { phone, hours } : null;
-}
-
-// ── Yellow Pages scraper ──────────────────────────────────────────────────────
-// Yellow Pages is a purpose-built US business directory — fully server-side
-// rendered, phone numbers always in the initial HTML, great coverage for
-// pharmacies, clinics, and hospitals.
-async function fetchYellowPagesData(
-  name: string,
-  city: string,
-  state: string,
-): Promise<{ phone?: string; hours?: string } | null> {
-  const params = new URLSearchParams({
-    search_terms: name,
-    geo_location_terms: `${city}, ${state}`,
-  });
-  const url = `https://www.yellowpages.com/search?${params}`;
-  console.log(`[YP] query: "${name}" in "${city}, ${state}"`);
-  const raw = await scrapeHtml(url, "YP");
-  if (!raw || raw.length < 5000) return null;
-
-  // YP renders the first (most relevant) result's phone inside the listing card.
-  // The primary phone link always has class="phone primary" or just appears first.
-  const phone = extractPhone(raw, "YP");
-  const hours = extractHoursFromHtml(raw, "YP");
-  console.log(`[YP] result: phone=${phone ?? "—"} hours=${hours ? hours.slice(0, 40) : "—"}`);
-  return phone || hours ? { phone, hours } : null;
 }
 
 // ── Facility icon helper ──────────────────────────────────────────────────────
@@ -1152,7 +990,6 @@ function applyMockData(places: NearbyPlace[]): NearbyPlace[] {
       updated = {
         ...updated,
         phone: `(310) ${String(exch).padStart(3, "0")}-${String(sub).padStart(4, "0")}`,
-        isMockPhone: true,
       };
     }
 
@@ -1186,7 +1023,7 @@ function applyMockData(places: NearbyPlace[]): NearbyPlace[] {
         }
       }
 
-      updated = { ...updated, open_now, hours_display, isMockHours: true };
+      updated = { ...updated, open_now, hours_display };
     }
 
     return updated;
@@ -1514,9 +1351,7 @@ export default function HomeScreen() {
       );
     }
 
-    // ── Resolve precise addresses once; shared by both 3-c (NPI) and 3-d (Google)
-    // Include ALL places that will need Google (missing phone OR hours) so every
-    // place gets a precise address for the search query, not just a city name.
+    // ── Resolve precise addresses for NPI matching ───────────────────────────
     const needsAddr = results.filter(
       (p) =>
         (!p.phone && !phoneEnrich.has(p.place_id)) ||
@@ -1557,47 +1392,6 @@ export default function HomeScreen() {
       }
     }
 
-    // 3-d: Google Search scraping — sequential to avoid rate limiting.
-    //      Runs for anything still missing phone OR hours after all prior passes.
-    //      Updates state one place at a time as results come in.
-    const needsGoogle = results.filter(
-      (p) =>
-        (!p.phone && !phoneEnrich.has(p.place_id)) ||
-        (!p.hours_display && !hoursEnrich.has(p.place_id)),
-    );
-    for (const p of needsGoogle.slice(0, 15)) {
-      const enriched = addrEnriched.find((e) => e.place_id === p.place_id) ?? p;
-      const addressLine = [
-        enriched.houseNumber,
-        enriched.street,
-        geo?.city,
-        geo?.state,
-      ].filter(Boolean).join(" ");
-
-      if (!addressLine) continue;
-
-      const data =
-        (await fetchBingData(p.name, addressLine)) ??
-        (await fetchYellowPagesData(p.name, geo?.city ?? "", geo?.state ?? ""));
-      if (data?.phone || data?.hours) {
-        setPlaces((prev) =>
-          prev.map((pl) => {
-            if (pl.place_id !== p.place_id) return pl;
-            let u = pl;
-            if (data.phone && (!pl.phone || pl.isMockPhone))
-              u = { ...u, phone: data.phone, isMockPhone: false };
-            if (data.hours && (!pl.hours_display || pl.isMockHours)) {
-              const parsed = parseOpeningHours(data.hours);
-              if (parsed.hours_display)
-                u = { ...u, open_now: parsed.open_now, hours_display: parsed.hours_display, isMockHours: false };
-            }
-            return u;
-          }),
-        );
-      }
-      // ~1 req/sec — polite enough that Google rarely rate-limits mobile UAs
-      await new Promise((r) => setTimeout(r, 1000));
-    }
   }, [snapTo]);
 
   useEffect(() => {
@@ -1742,7 +1536,7 @@ export default function HomeScreen() {
             activeOpacity={0.82}
           >
             <MaterialIcons name="directions" size={15} color={PURPLE} />
-            <Text style={styles.actionBtnText}>Directions</Text>
+            <Text style={styles.actionBtnText} numberOfLines={1}>Directions</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -1752,7 +1546,7 @@ export default function HomeScreen() {
             disabled={!item.hours_display}
           >
             <MaterialIcons name="access-time" size={15} color={item.hours_display ? "#3B82F6" : "#475569"} />
-            <Text style={[styles.actionBtnText, styles.actionBtnTextHours, !item.hours_display && styles.actionBtnTextDisabled]}>Hours</Text>
+            <Text style={[styles.actionBtnText, styles.actionBtnTextHours, !item.hours_display && styles.actionBtnTextDisabled]} numberOfLines={1}>Hours</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -1762,7 +1556,7 @@ export default function HomeScreen() {
             disabled={!item.phone}
           >
             <MaterialIcons name="call" size={15} color={item.phone ? "#22C55E" : "#475569"} />
-            <Text style={[styles.actionBtnText, styles.actionBtnTextCall, !item.phone && styles.actionBtnTextDisabled]}>Call</Text>
+            <Text style={[styles.actionBtnText, styles.actionBtnTextCall, !item.phone && styles.actionBtnTextDisabled]} numberOfLines={1}>Call</Text>
           </TouchableOpacity>
         </View>
       </TouchableOpacity>
@@ -2382,7 +2176,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 13,
-    marginBottom: 12,
+    marginBottom: 8,
   },
   listIcon: {
     width: 50,
@@ -2441,8 +2235,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    marginTop: 10,
-    marginBottom: 2,
+    marginTop: 4,
+    marginBottom: 6,
     flexWrap: "wrap",
   },
   waitBadge: {
@@ -2467,8 +2261,8 @@ const styles = StyleSheet.create({
   // Action button row
   actionRow: {
     flexDirection: "row",
-    gap: 8,
-    marginTop: 12,
+    gap: 6,
+    marginTop: 8,
   },
   actionBtn: {
     flex: 1,
@@ -2476,7 +2270,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 5,
-    paddingVertical: 9,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: BORDER_COLOR,
@@ -2495,7 +2290,7 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
     opacity: 0.38,
   },
-  actionBtnText: { fontSize: 12, fontWeight: "700", color: PURPLE },
+  actionBtnText: { fontSize: 11, fontWeight: "700", color: PURPLE },
   actionBtnTextHours: { color: "#3B82F6" },
   actionBtnTextCall: { color: "#22C55E" },
   actionBtnTextDisabled: { color: "#475569" },
