@@ -17,6 +17,7 @@ SYMPTOM_AGENT_ADDRESS = os.getenv("SYMPTOM_AGENT_ADDRESS")
 ROUTING_AGENT_ADDRESS = os.getenv("ROUTING_AGENT_ADDRESS")
 MONITOR_AGENT_ADDRESS = os.getenv("MONITOR_AGENT_ADDRESS")
 ALERT_AGENT_ADDRESS   = os.getenv("ALERT_AGENT_ADDRESS")
+FOLLOWUP_AGENT_ADDRESS = os.getenv("FOLLOWUP_AGENT_ADDRESS")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
@@ -32,6 +33,7 @@ local_resolver = RulesBasedResolver({
     ROUTING_AGENT_ADDRESS: BUREAU_ENDPOINT,
     MONITOR_AGENT_ADDRESS: BUREAU_ENDPOINT,
     ALERT_AGENT_ADDRESS:   BUREAU_ENDPOINT,
+    FOLLOWUP_AGENT_ADDRESS: BUREAU_ENDPOINT,
 })
 
 # Import models
@@ -114,6 +116,11 @@ class AlertSubscribePayload(BaseModel):
     session_id: str
     hospital_id: str
     department: str
+
+class FollowUpCarePayload(BaseModel):
+    user_id: str
+    triage: dict
+    hospital_name: str
 
 
 # Endpoints
@@ -287,6 +294,29 @@ async def get_alert_status(session_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Alert status error: {str(e)}")
+    
+# Generate a post visit follow up care plan based on triage results
+@app.post("/followup")
+async def get_followup_care(payload: FollowUpCarePayload):
+    try:
+        from agents.models import FollowUpCareRequest
+        data = await send_and_receive(
+            FOLLOWUP_AGENT_ADDRESS,
+            FollowUpCareRequest(
+                user_id=payload.user_id,
+                triage=payload.triage,
+                hospital_name=payload.hospital_name
+            )
+        )
+        return {
+            "care_plan": data.get("care_plan", {}),
+            "user_id": payload.user_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"FollowUpAgent error: {str(e)}")
+
 
 if __name__ == "__main__":
     import uvicorn
