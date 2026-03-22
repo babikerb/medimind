@@ -68,7 +68,7 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-      <StatusBar style="auto" />
+      <StatusBar style="light" backgroundColor="#0f172a" translucent={false} />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(auth)/welcome" />
         <Stack.Screen name="(tabs)" />

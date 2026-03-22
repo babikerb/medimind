@@ -15,7 +15,7 @@ export default function TabLayout() {
         tabBarInactiveTintColor: "#94a3b8",
         tabBarStyle: {
           position: "relative",
-          height: Platform.OS === "ios" ? 88 : 68,
+          height: Platform.OS === "ios" ? 65 : 55,
 
           backgroundColor: "#0f172a",
 
@@ -36,10 +36,10 @@ export default function TabLayout() {
           fontSize: 10,
           fontWeight: "700",
           letterSpacing: 0.5,
-          marginBottom: Platform.OS === "ios" ? 0 : 10,
+          marginBottom: Platform.OS === "ios" ? 5 : 5,
         },
         tabBarIconStyle: {
-          marginTop: 5,
+          marginTop: 4,
         },
       }}
     >
@@ -48,16 +48,7 @@ export default function TabLayout() {
         options={{
           title: "HOME",
           tabBarIcon: ({ color }) => (
-            <MaterialIcons name="home" size={26} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="explore"
-        options={{
-          title: "EXPLORE",
-          tabBarIcon: ({ color }) => (
-            <MaterialIcons name="search" size={26} color={color} />
+            <MaterialIcons name="home" size={24} color={color} />
           ),
         }}
       />
@@ -66,7 +57,7 @@ export default function TabLayout() {
         options={{
           title: "PROFILE",
           tabBarIcon: ({ color }) => (
-            <MaterialIcons name="person" size={26} color={color} />
+            <MaterialIcons name="person" size={24} color={color} />
           ),
         }}
       />

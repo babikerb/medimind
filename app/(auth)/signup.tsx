@@ -3,6 +3,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -14,7 +15,6 @@ import {
   Platform,
   SafeAreaView,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -522,7 +522,7 @@ export default function MultiStepSignUp() {
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
       <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="light-content" />
+        <StatusBar style="light" />
         <View style={styles.topNav}>
           <TouchableOpacity
             style={styles.backButton}

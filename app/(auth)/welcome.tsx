@@ -1,4 +1,5 @@
 import { useRouter } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import { useVideoPlayer, VideoView } from "expo-video";
 import React, { useEffect, useRef, useState } from "react";
 import {
@@ -6,7 +7,6 @@ import {
     Animated,
     AppState,
     SafeAreaView,
-    StatusBar,
     StyleSheet,
     Text,
     TouchableOpacity,
@@ -99,7 +99,7 @@ export default function WelcomeScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" />
+      <StatusBar style="light" />
 
       <VideoView
         style={StyleSheet.absoluteFill}

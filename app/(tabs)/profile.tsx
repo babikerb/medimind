@@ -1,5 +1,6 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useState } from "react";
 import {
     Alert,
@@ -7,7 +8,6 @@ import {
     Platform,
     SafeAreaView,
     ScrollView,
-    StatusBar,
     StyleSheet,
     Text,
     TouchableOpacity,
@@ -121,7 +121,7 @@ export default function ProfileScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" />
+      <StatusBar style="light" />
 
       <View style={styles.topNav}>
         <Text style={styles.navTitle}>PROFILE</Text>

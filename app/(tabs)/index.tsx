@@ -1,98 +1,165 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { MaterialIcons } from "@expo/vector-icons";
+import * as Location from "expo-location";
+import { StatusBar } from "expo-status-bar";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Dimensions,
+  Platform,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import MapView, { PROVIDER_GOOGLE } from "react-native-maps";
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+const { width, height } = Dimensions.get("window");
+
+const APP_BG_COLOR = "#0f172a";
 
 export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+  const mapRef = useRef<MapView>(null);
+  const [location, setLocation] = useState<Location.LocationObject | null>(
+    null,
+  );
+  const [symptoms, setSymptoms] = useState("");
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+  const updateLocation = async () => {
+    let { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== "granted") return;
+
+    let loc = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Highest,
+    });
+
+    setLocation(loc);
+    centerMap(loc.coords.latitude, loc.coords.longitude);
+  };
+
+  useEffect(() => {
+    updateLocation();
+  }, []);
+
+  const centerMap = (lat: number, lon: number) => {
+    mapRef.current?.animateToRegion(
+      {
+        latitude: lat,
+        longitude: lon,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      },
+      1000,
+    );
+  };
+
+  return (
+    <View style={styles.container}>
+      <StatusBar style="dark" backgroundColor="#0f172a" />
+
+      {location ? (
+        <MapView
+          ref={mapRef}
+          provider={PROVIDER_GOOGLE}
+          style={styles.map}
+          showsUserLocation={true}
+          showsMyLocationButton={false}
+          initialRegion={{
+            latitude: location.coords.latitude,
+            longitude: location.coords.longitude,
+            latitudeDelta: 0.05,
+            longitudeDelta: 0.05,
+          }}
+        />
+      ) : (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#7C3AED" />
+        </View>
+      )}
+
+      {/* Control Group - Layers removed, Location moved up */}
+      <View style={styles.controlsContainer}>
+        <TouchableOpacity
+          style={styles.controlButton}
+          onPress={() =>
+            location &&
+            centerMap(location.coords.latitude, location.coords.longitude)
+          }
+          activeOpacity={0.7}
+        >
+          <MaterialIcons name="my-location" size={26} color="#7C3AED" />
+        </TouchableOpacity>
+      </View>
+
+      {/* Symptoms Search */}
+      <View style={styles.searchContainer}>
+        <View style={styles.searchBar}>
+          <MaterialIcons name="healing" size={22} color="#7C3AED" />
+          <TextInput
+            placeholder="Enter symptoms..."
+            style={styles.searchInput}
+            value={symptoms}
+            onChangeText={setSymptoms}
+            placeholderTextColor="#94A3B8"
+          />
+        </View>
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  container: {
+    flex: 1,
+    backgroundColor: APP_BG_COLOR,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  map: { width, height },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    backgroundColor: APP_BG_COLOR,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+
+  controlsContainer: {
+    position: "absolute",
+    right: 16,
+    top: height * 0.15,
+  },
+  controlButton: {
+    backgroundColor: "#FFFFFF",
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+
+  searchContainer: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 60 : 50,
+    width: "100%",
+    paddingHorizontal: 20,
+  },
+  searchBar: {
+    flexDirection: "row",
+    backgroundColor: "#FFF",
+    padding: 14,
+    borderRadius: 15,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 5,
+    elevation: 3,
+  },
+  searchInput: {
+    flex: 1,
+    marginLeft: 10,
+    fontSize: 16,
+    color: "#1E293B",
   },
 });

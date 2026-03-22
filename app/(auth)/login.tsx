@@ -1,4 +1,5 @@
 import { useRouter } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -8,7 +9,6 @@ import {
   LayoutAnimation,
   Platform,
   SafeAreaView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -65,7 +65,7 @@ export default function LoginScreen() {
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="light-content" />
+        <StatusBar style="light" />
 
         {/* Top Navigation - Smooth Fade/Slide */}
         <View style={styles.topNav}>
