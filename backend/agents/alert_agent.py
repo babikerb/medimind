@@ -20,12 +20,12 @@ from agents.models import AlertRequest, AlertNotification
 
 alert_protocol = Protocol("AlertProtocol")
 
-# In-memory store of active user alerts
+# In memory store of active user alerts
 # { session_id: { user_id, hospital_id, department, last_wait } }
 active_alerts = {}
 
 
-@alert_protocol.on_message(model=AlertRequest, replies={AlertNotification})
+@alert_protocol.on_message(model=AlertRequest, replies={AlertNotification}, allow_unverified=True)
 async def handle_alert_request(ctx: Context, sender: str, msg: AlertRequest):
     """Register a user to receive alerts for their recommended hospital."""
     ctx.logger.info(f"[AlertAgent] Registering alert for user {msg.user_id} hospital {msg.hospital_id}")
@@ -36,11 +36,18 @@ async def handle_alert_request(ctx: Context, sender: str, msg: AlertRequest):
         "sender": sender,
         "last_wait": None
     }
+    # Send confirmation back so gateway doesn't hang
+    await ctx.send(sender, AlertNotification(
+        user_id=msg.user_id,
+        hospital_name="",
+        message=f"Alert registered for session {msg.session_id}",
+        new_wait_minutes=0
+    ))
 
 
+# Every 60 seconds check if any monitored hospital's status changed significantly
 @alert_agent.on_interval(period=60.0)
 async def check_for_changes(ctx: Context):
-    """Every 60 seconds check if any monitored hospital's status changed significantly."""
     if not active_alerts:
         return
 
