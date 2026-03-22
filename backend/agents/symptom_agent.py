@@ -45,7 +45,7 @@ def call_groq(system_prompt: str, user_message: str) -> str:
     return response.json()["choices"][0]["message"]["content"].strip()
 
 
-# --- STEP 1: Receive symptoms, return follow-up questions ---
+# Step 1. Receive symptoms, return follow up questions
 @protocol.on_message(model=SymptomRequest)
 async def handle_symptom_input(ctx: Context, sender: str, msg: SymptomRequest):
     ctx.logger.info(f"Received symptoms from {msg.user_id}: {msg.symptom_input}")
@@ -96,7 +96,7 @@ Example: ["How long have you had this pain?", "Is the pain sharp or dull?"]
     ))
 
 
-# --- STEP 2: Receive answers, return ESI triage result ---
+# Step 2. Receive answers, return ESI triage result
 @protocol.on_message(model=FollowUpAnswersRequest)
 async def handle_followup_answers(ctx: Context, sender: str, msg: FollowUpAnswersRequest):
     ctx.logger.info(f"Received follow-up answers from {msg.user_id}")

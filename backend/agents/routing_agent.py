@@ -25,9 +25,7 @@ routing_agent = Agent(
 
 protocol = Protocol("RoutingProtocol")
 
-
 def haversine_distance(lat1, lon1, lat2, lon2) -> float:
-    """Calculate distance in miles between two coordinates."""
     R = 3958.8  # Earth radius in miles
     lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
     dlat = lat2 - lat1
@@ -36,7 +34,6 @@ def haversine_distance(lat1, lon1, lat2, lon2) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 def get_capacity_snapshot(hospital_id: str, department: str) -> dict:
-    """Get latest capacity snapshot for a hospital department."""
     try:
         result = supabase.table("hospital_capacity_snapshots") \
             .select("*") \
@@ -53,7 +50,6 @@ def get_capacity_snapshot(hospital_id: str, department: str) -> dict:
 
 
 def simulate_capacity(hospital: dict, department: str) -> dict:
-    """Simulate capacity if no snapshot exists."""
     import random
     base_rate = hospital.get("base_occupancy_rate", 0.75)
     # Add some randomness around the baseline
@@ -75,13 +71,6 @@ def simulate_capacity(hospital: dict, department: str) -> dict:
 
 
 def score_hospital(hospital: dict, triage: dict, user_lat: float, user_lon: float, insurance: str = None) -> float:
-    """
-    Composite scoring formula:
-    - 40% department bed availability
-    - 30% estimated wait time for ESI level
-    - 20% distance
-    - 10% insurance match
-    """
     department = triage.get("identified_department", "general")
     esi_level = triage.get("esi_level", 3)
 
@@ -216,7 +205,6 @@ async def handle_routing_request(ctx: Context, sender: str, msg: RoutingRequest)
 
 @protocol.on_message(model=TriageResult)
 async def handle_triage_from_symptom_agent(ctx: Context, sender: str, msg: TriageResult):
-    """Handle triage results forwarded directly from symptom agent."""
     ctx.logger.info(f"Received triage from symptom agent for user {msg.user_id}")
     # This requires user location — log for now, gateway handles full flow
     ctx.logger.info(f"ESI {msg.esi_level} — {msg.identified_department} — {msg.urgency_summary}")
