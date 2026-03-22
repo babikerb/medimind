@@ -1,17 +1,19 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
-    Alert,
-    Image,
-    Platform,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Image,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { supabase } from "../../supabase";
 
@@ -55,6 +57,8 @@ export default function ProfileScreen() {
   const router = useRouter();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [email, setEmail] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     async function fetchProfile() {
@@ -80,6 +84,13 @@ export default function ProfileScreen() {
       } else {
         setProfile(data);
       }
+
+      setLoading(false);
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 280,
+        useNativeDriver: true,
+      }).start();
     }
 
     fetchProfile();
@@ -124,10 +135,59 @@ export default function ProfileScreen() {
       <StatusBar style="light" />
 
       <View style={styles.topNav}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <MaterialIcons name="arrow-back" size={24} color="#fff" />
+        </TouchableOpacity>
         <Text style={styles.navTitle}>PROFILE</Text>
+        <View style={{ width: 24 }} />
       </View>
 
-      <ScrollView
+      {loading ? (
+        <View style={styles.loadingScreen}>
+          {/* Avatar skeleton */}
+          <View style={styles.skeletonAvatar} />
+          <View style={styles.skeletonName} />
+          <View style={styles.skeletonEmail} />
+
+          <View style={styles.skeletonSection} />
+          <View style={styles.skeletonCard}>
+            {[0, 1, 2, 3].map((i) => (
+              <View key={i} style={styles.skeletonRow}>
+                <View style={styles.skeletonIcon} />
+                <View style={{ flex: 1, gap: 6 }}>
+                  <View style={styles.skeletonLineShort} />
+                  <View style={styles.skeletonLineLong} />
+                </View>
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.skeletonSection} />
+          <View style={styles.skeletonCard}>
+            {[0, 1].map((i) => (
+              <View key={i} style={styles.skeletonRow}>
+                <View style={styles.skeletonIcon} />
+                <View style={{ flex: 1, gap: 6 }}>
+                  <View style={styles.skeletonLineShort} />
+                  <View style={styles.skeletonLineLong} />
+                </View>
+              </View>
+            ))}
+          </View>
+
+          <ActivityIndicator
+            size="small"
+            color="#7C3AED"
+            style={{ marginTop: 24 }}
+          />
+        </View>
+      ) : null}
+
+      <Animated.ScrollView
+        style={[{ opacity: fadeAnim }, loading && { position: "absolute", opacity: 0 }]}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
@@ -220,7 +280,7 @@ export default function ProfileScreen() {
           />
           <Text style={styles.logoutButtonText}>Log Out</Text>
         </TouchableOpacity>
-      </ScrollView>
+      </Animated.ScrollView>
     </SafeAreaView>
   );
 }
@@ -228,10 +288,12 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0F172A" },
   topNav: {
-    paddingHorizontal: 28,
+    paddingHorizontal: 20,
     paddingTop: Platform.OS === "android" ? 40 : 10,
     height: 60,
-    justifyContent: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   navTitle: {
     color: "#FFFFFF",
@@ -348,6 +410,77 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 16,
     fontWeight: "600",
+  },
+
+  loadingScreen: {
+    flex: 1,
+    paddingHorizontal: 28,
+    paddingTop: 20,
+  },
+  skeletonAvatar: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: "#1E293B",
+    alignSelf: "center",
+    marginBottom: 14,
+  },
+  skeletonName: {
+    width: 160,
+    height: 22,
+    borderRadius: 8,
+    backgroundColor: "#1E293B",
+    alignSelf: "center",
+    marginBottom: 10,
+  },
+  skeletonEmail: {
+    width: 200,
+    height: 32,
+    borderRadius: 100,
+    backgroundColor: "#1E293B",
+    alignSelf: "center",
+    marginBottom: 36,
+  },
+  skeletonSection: {
+    width: 80,
+    height: 12,
+    borderRadius: 4,
+    backgroundColor: "#1E293B",
+    marginBottom: 12,
+  },
+  skeletonCard: {
+    backgroundColor: "#1E293B",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#334155",
+    paddingHorizontal: 20,
+    marginBottom: 24,
+  },
+  skeletonRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 16,
+    gap: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: "#334155",
+  },
+  skeletonIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "#2D3F55",
+  },
+  skeletonLineShort: {
+    height: 10,
+    width: "40%",
+    borderRadius: 4,
+    backgroundColor: "#2D3F55",
+  },
+  skeletonLineLong: {
+    height: 14,
+    width: "70%",
+    borderRadius: 4,
+    backgroundColor: "#334155",
   },
 
   logoutButton: {
