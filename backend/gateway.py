@@ -3,8 +3,10 @@ import json
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Union
+from typing import Optional
 from uagents.query import send_sync_message
+from uagents.resolver import RulesBasedResolver
+from uagents_core.identity import Identity
 from uagents_core.envelope import Envelope
 from uagents_core.types import MsgStatus
 from supabase import create_client
@@ -32,7 +34,22 @@ from agents.models import (
     GatewayTriageRequest,
     GatewayTriageResponse,
     RoutingRequest,
+    RoutingResponse,
+    AlertNotification,
+    FollowUpCareResponse,
 )
+
+# ─── Local resolver ──────────────────────────────────────────────────────────
+# Agents run locally with mailbox=True for Agentverse registration,
+# but the gateway communicates with them via their local HTTP endpoints
+# for synchronous request/response.
+local_resolver = RulesBasedResolver({
+    SYMPTOM_AGENT_ADDRESS: ["http://localhost:8001/submit"],
+    ROUTING_AGENT_ADDRESS: ["http://localhost:8002/submit"],
+    MONITOR_AGENT_ADDRESS: ["http://localhost:8003/submit"],
+    ALERT_AGENT_ADDRESS: ["http://localhost:8004/submit"],
+    FOLLOWUP_AGENT_ADDRESS: ["http://localhost:8005/submit"],
+})
 
 # Helpers
 
@@ -43,14 +60,12 @@ def is_capacity_ready() -> bool:
     except Exception:
         return False
 
-# Send a message to an agent on Agentverse via send_sync_message()
-# Resolves the destination through the Almanac (Agentverse registry)
-# and waits for the response
-async def send_and_receive(address: str, message) -> dict:
-
+async def send_and_receive(address: str, message, response_type=None) -> dict:
     response = await send_sync_message(
         destination=address,
         message=message,
+        response_type=response_type,
+        resolver=local_resolver,
         timeout=30
     )
 
@@ -66,9 +81,11 @@ async def send_and_receive(address: str, message) -> dict:
             raise HTTPException(status_code=500, detail="Agent returned empty payload")
         return json.loads(payload_str)
 
-    # send_sync_message can return a Model directly
     if hasattr(response, 'model_dump'):
         return response.model_dump()
+
+    if isinstance(response, str):
+        return json.loads(response)
 
     raise HTTPException(status_code=500, detail=f"Unexpected response type: {type(response)}")
 
@@ -131,10 +148,8 @@ def health_check():
     }
 
 
-# Sends symptoms to SymptomAgent on Agentverse, returns 1-5 follow-up questions
 @app.post("/symptoms")
 async def submit_symptoms(payload: SymptomInputRequest):
-
     try:
         data = await send_and_receive(
             SYMPTOM_AGENT_ADDRESS,
@@ -142,7 +157,8 @@ async def submit_symptoms(payload: SymptomInputRequest):
                 user_id=payload.user_id,
                 symptom_input=payload.symptom_input,
                 patient_profile=payload.patient_profile
-            )
+            ),
+            response_type=GatewayQuestionsResponse
         )
         return {
             "questions": data.get("questions", []),
@@ -153,11 +169,8 @@ async def submit_symptoms(payload: SymptomInputRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"SymptomAgent error: {str(e)}")
 
-# Step 1. SymptomAgent scores ESI and identifies department
-# Step 2. RoutingAgent ranks hospitals based on triage result
 @app.post("/triage")
 async def submit_triage(payload: FollowUpAnswersPayload):
-
     try:
         # 1. ESI scoring via SymptomAgent
         triage_data = await send_and_receive(
@@ -171,7 +184,8 @@ async def submit_triage(payload: FollowUpAnswersPayload):
                 user_latitude=payload.user_latitude,
                 user_longitude=payload.user_longitude,
                 insurance_provider=payload.insurance_provider
-            )
+            ),
+            response_type=GatewayTriageResponse
         )
 
         triage = triage_data.get("triage", triage_data)
@@ -185,7 +199,8 @@ async def submit_triage(payload: FollowUpAnswersPayload):
                 user_latitude=payload.user_latitude,
                 user_longitude=payload.user_longitude,
                 insurance_provider=payload.insurance_provider
-            )
+            ),
+            response_type=RoutingResponse
         )
 
         return {
@@ -203,7 +218,6 @@ async def submit_triage(payload: FollowUpAnswersPayload):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Triage error: {str(e)}")
 
-# Subscribe to wait time alerts for a specific hospital
 @app.post("/alert/subscribe")
 async def subscribe_alert(payload: AlertSubscribePayload):
     try:
@@ -215,7 +229,8 @@ async def subscribe_alert(payload: AlertSubscribePayload):
                 session_id=payload.session_id,
                 hospital_id=payload.hospital_id,
                 department=payload.department
-            )
+            ),
+            response_type=AlertNotification
         )
         return {
             "status": "subscribed",
@@ -228,11 +243,9 @@ async def subscribe_alert(payload: AlertSubscribePayload):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AlertAgent error: {str(e)}")
 
-# Poll the latest wait time for a subscribed hospital
 @app.get("/alert/status/{session_id}")
 async def get_alert_status(session_id: str):
     try:
-        # Look up the routing session to get the hospital info
         session = supabase.table("routing_sessions") \
             .select("*") \
             .eq("id", session_id) \
@@ -247,12 +260,10 @@ async def get_alert_status(session_id: str):
         if not hospitals:
             raise HTTPException(status_code=404, detail="No hospitals in session")
 
-        # Get the top recommended hospital
         hospital = hospitals[0]
         hospital_id = hospital.get("id")
         department = session_data.get("identified_department", "general")
 
-        # Fetch latest capacity snapshot
         snapshot = supabase.table("hospital_capacity_snapshots") \
             .select("*") \
             .eq("hospital_id", hospital_id) \
@@ -285,8 +296,7 @@ async def get_alert_status(session_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Alert status error: {str(e)}")
-    
-# Generate a post visit follow up care plan based on triage results
+
 @app.post("/followup")
 async def get_followup_care(payload: FollowUpCarePayload):
     try:
@@ -297,7 +307,8 @@ async def get_followup_care(payload: FollowUpCarePayload):
                 user_id=payload.user_id,
                 triage=payload.triage,
                 hospital_name=payload.hospital_name
-            )
+            ),
+            response_type=FollowUpCareResponse
         )
         return {
             "care_plan": data.get("care_plan", {}),

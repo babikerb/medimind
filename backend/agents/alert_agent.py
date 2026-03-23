@@ -28,7 +28,7 @@ alert_protocol = Protocol("AlertProtocol")
 active_alerts = {}
 
 
-@alert_protocol.on_message(model=AlertRequest, replies={AlertNotification}, allow_unverified=True)
+@alert_protocol.on_query(model=AlertRequest, replies={AlertNotification})
 async def handle_alert_request(ctx: Context, sender: str, msg: AlertRequest):
     """Register a user to receive alerts for their recommended hospital."""
     ctx.logger.info(f"[AlertAgent] Registering alert for user {msg.user_id} hospital {msg.hospital_id}")

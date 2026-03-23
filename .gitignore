@@ -5,6 +5,8 @@ info.txt
 
 # dependencies
 node_modules/
+.venv/
+backend/.venv/
 
 # Expo
 .expo/

@@ -43,7 +43,7 @@ def call_asi1(system_prompt: str, user_message: str) -> str:
     return response.json()["choices"][0]["message"]["content"].strip()
 
 
-@followup_protocol.on_message(model=FollowUpCareRequest, replies={FollowUpCareResponse}, allow_unverified=True)
+@followup_protocol.on_query(model=FollowUpCareRequest, replies={FollowUpCareResponse})
 async def handle_followup_request(ctx: Context, sender: str, msg: FollowUpCareRequest):
     ctx.logger.info(f"[FollowUpAgent] Generating care plan for user {msg.user_id}")
 

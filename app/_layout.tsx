@@ -74,6 +74,8 @@ export default function RootLayout() {
         <Stack.Screen name="(auth)/welcome" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="diagnose" />
+        <Stack.Screen name="results" />
+        <Stack.Screen name="care-plan" />
         <Stack.Screen name="modal" options={{ presentation: "modal" }} />
       </Stack>
     </ThemeProvider>

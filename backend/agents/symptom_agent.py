@@ -61,7 +61,7 @@ def build_profile_context(profile: dict) -> str:
     return context
 
 
-@symptom_protocol.on_message(model=GatewaySymptomRequest, replies={GatewayQuestionsResponse}, allow_unverified=True)
+@symptom_protocol.on_query(model=GatewaySymptomRequest, replies={GatewayQuestionsResponse})
 async def handle_symptom_input(ctx: Context, sender: str, msg: GatewaySymptomRequest):
     ctx.logger.info(f"[SymptomAgent] Generating questions for user {msg.user_id}")
 
@@ -95,7 +95,7 @@ Example: ["How long have you had this pain?", "Is the pain sharp or dull?"]"""
     ))
 
 
-@symptom_protocol.on_message(model=GatewayTriageRequest, replies={GatewayTriageResponse}, allow_unverified=True)
+@symptom_protocol.on_query(model=GatewayTriageRequest, replies={GatewayTriageResponse})
 async def handle_triage_request(ctx: Context, sender: str, msg: GatewayTriageRequest):
     ctx.logger.info(f"[SymptomAgent] Scoring ESI for user {msg.user_id}")
 

@@ -1,7 +1,9 @@
 import { MaterialIcons } from "@expo/vector-icons";
+import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   Dimensions,
   KeyboardAvoidingView,
   Linking,
@@ -14,6 +16,12 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { supabase } from "../supabase";
+import {
+  submitSymptoms as apiSubmitSymptoms,
+  submitTriage as apiSubmitTriage,
+  TriageResponse,
+} from "../services/api";
 
 const { width } = Dimensions.get("window");
 
@@ -32,7 +40,7 @@ const AMBER = "#F59E0B";
 const GREEN = "#10B981";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type FlowStep = "symptom-input" | "questions" | "processing" | "results";
+type FlowStep = "symptom-input" | "loading-questions" | "questions" | "processing" | "results";
 type Severity = "mild" | "moderate" | "urgent";
 
 interface DiagnosisResult {
@@ -41,6 +49,7 @@ interface DiagnosisResult {
   identifiedDepartment: string;
   urgencySummary: string;
   call911: boolean;
+  recommendedCareType?: string;
 }
 
 // ─── Severity config ──────────────────────────────────────────────────────────
@@ -59,122 +68,31 @@ const esiToSeverity = (esi: number): Severity => {
   return "mild";
 };
 
-// ─── Generic follow-up questions ─────────────────────────────────────────────
-const GENERIC_QUESTIONS = [
-  "How long have you been experiencing these symptoms?",
-  "On a scale of 1 to 10, how severe is your discomfort right now?",
-  "Do you have any fever, chills, or sweating?",
-  "Have you taken any medication or tried anything to relieve your symptoms?",
-  "Do you have any existing medical conditions or known allergies we should know about?",
-];
-
 // ─── Quick-answer chips ───────────────────────────────────────────────────────
 function getQuickAnswers(question: string): string[] {
   const q = question.toLowerCase();
   if (/how long|duration|since|started|began/.test(q))
     return ["< 1 hour", "A few hours", "1–2 days", "3+ days"];
-  if (/scale|rate|severe|1 to 10/.test(q))
+  if (/scale|rate|severe|1 to 10|intensity/.test(q))
     return ["1–3 (mild)", "4–6 (moderate)", "7–10 (severe)"];
-  if (/fever|chills|sweat/.test(q))
+  if (/fever|chills|sweat|temperature/.test(q))
     return ["No fever", "Low (99–100 °F)", "High (101–103 °F)", "104 °F+"];
-  if (/medication|taken|tried|relieve/.test(q))
+  if (/medication|taken|tried|relieve|treatment/.test(q))
     return ["Yes, it helped", "Yes, no relief", "No medication taken"];
-  if (/condition|allerg|existing|medical history/.test(q))
+  if (/condition|allerg|existing|medical history|chronic/.test(q))
     return ["None", "Diabetes", "Heart condition", "Hypertension", "Asthma", "Other"];
+  if (/sharp|dull|type|nature|character/.test(q))
+    return ["Sharp", "Dull/aching", "Burning", "Throbbing"];
+  if (/worsen|better|change|improve/.test(q))
+    return ["Getting worse", "Staying the same", "Getting better"];
   return [];
-}
-
-// ─── Local triage engine ──────────────────────────────────────────────────────
-function localTriage(symptoms: string, answers: string[]): {
-  esiLevel: number;
-  identifiedDepartment: string;
-  urgencySummary: string;
-  call911: boolean;
-} {
-  // Score symptoms and answers separately so a mild symptom + long duration
-  // doesn't accidentally escalate to urgent.
-  const symptomText = symptoms.toLowerCase();
-  const answerText  = answers.join(" ").toLowerCase();
-  const fullText    = symptomText + " " + answerText;
-
-  // Urgent ONLY when the primary complaint itself is dangerous —
-  // answers alone cannot push to urgent.
-  const URGENT_SYMPTOMS = [
-    "chest pain", "chest tightness", "heart attack", "stroke",
-    "can't breathe", "cannot breathe", "difficulty breathing",
-    "unconscious", "unresponsive", "seizure", "overdose",
-    "coughing blood", "vomiting blood", "severe bleeding", "suicidal",
-  ];
-
-  // Moderate signals — checked across full text but require at least 2 hits
-  // OR one strong escalator in the answers to prevent over-triggering.
-  const MODERATE_SYMPTOMS = [
-    "fever", "infection", "persistent", "worsening", "vomiting",
-    "confusion", "numbness", "weakness", "swelling",
-  ];
-  // Answer-side escalators: only meaningful when combined with a symptom
-  const MODERATE_ANSWER_ESCALATORS = [
-    "7–10", "7-10", "3+ days", "several days", "high (101",
-  ];
-
-  const isUrgent = URGENT_SYMPTOMS.some((k) => symptomText.includes(k));
-
-  const symptomHits  = MODERATE_SYMPTOMS.filter((k) => symptomText.includes(k)).length;
-  const answerEscalates = MODERATE_ANSWER_ESCALATORS.some((k) => answerText.includes(k));
-  // Moderate if: 1+ moderate symptom keyword, OR any answer escalator paired
-  // with at least one symptom keyword anywhere.
-  const isModerate = symptomHits >= 1 || (answerEscalates && fullText.split(" ").length > 4);
-
-  // Department inferred from symptom text only (not answers)
-  let dept = "General Medicine";
-  if (/chest pain|chest tight|heart|palpitat/.test(symptomText))       dept = "Cardiology / ED";
-  else if (/shortness of breath|difficulty breath|lung|asthma|wheez/.test(symptomText)) dept = "Pulmonology / ED";
-  else if (/headache|migraine|dizz|faint|neuro/.test(symptomText))     dept = "Neurology";
-  else if (/stomach|abdomen|nausea|vomit|bowel|digest/.test(symptomText)) dept = "Gastroenterology";
-  else if (/broken|fracture|fall|sprain|joint|knee|ankle|wrist/.test(symptomText)) dept = "Orthopedics";
-  else if (/rash|skin|itch|hive/.test(symptomText))                    dept = "Dermatology";
-  else if (/fever|cough|cold|flu|infect|sore throat/.test(symptomText)) dept = "General Medicine";
-  else if (/eye|vision|sight/.test(symptomText))                       dept = "Ophthalmology";
-  else if (/ear|throat|nose|sinus/.test(symptomText))                  dept = "ENT";
-  else if (/urin|kidney|bladder/.test(symptomText))                    dept = "Urology";
-  else if (/anxiety|depress|mental|stress|panic/.test(symptomText))   dept = "Mental Health";
-  else if (/back|spine|neck/.test(symptomText))                        dept = "Orthopedics";
-
-  if (isUrgent) {
-    const call911 = /chest pain|can't breathe|cannot breathe|stroke|seizure|unresponsive/.test(symptomText);
-    return {
-      esiLevel: call911 ? 1 : 2,
-      identifiedDepartment: dept === "General Medicine" ? "Emergency" : dept,
-      urgencySummary:
-        "Your symptoms suggest a potentially serious condition that requires immediate medical attention. Please seek emergency care now or call 911.",
-      call911,
-    };
-  }
-
-  if (isModerate) {
-    return {
-      esiLevel: 3,
-      identifiedDepartment: dept,
-      urgencySummary:
-        "Your symptoms suggest a moderate condition. You should see a doctor within the next few hours and monitor closely for any worsening.",
-      call911: false,
-    };
-  }
-
-  return {
-    esiLevel: 4,
-    identifiedDepartment: dept,
-    urgencySummary:
-      "Your symptoms appear to be mild. Rest, stay hydrated, and monitor for any changes. If symptoms persist beyond 2–3 days or worsen, visit a clinic.",
-    call911: false,
-  };
 }
 
 // ─── Processing steps ─────────────────────────────────────────────────────────
 const PROCESSING_STEPS = [
-  "Reading your responses",
-  "Running symptom analysis",
-  "Preparing your assessment",
+  "Sending to AI triage agent",
+  "Scoring emergency severity",
+  "Finding best hospitals near you",
 ];
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -191,28 +109,96 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
   const [symptoms, setSymptoms] = useState(initialSymptom);
   const [flowStep, setFlowStep] = useState<FlowStep>("symptom-input");
   const [currentQuestion, setCurrentQuestion] = useState(0);
-  const [answers, setAnswers] = useState<string[]>(new Array(GENERIC_QUESTIONS.length).fill(""));
+  const [questions, setQuestions] = useState<string[]>([]);
+  const [answers, setAnswers] = useState<string[]>([]);
   const [result, setResult] = useState<DiagnosisResult | null>(null);
+  const [triageResponse, setTriageResponse] = useState<TriageResponse | null>(null);
   const [processStep, setProcessStep] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
-  const totalQuestions = GENERIC_QUESTIONS.length;
+  // User context
+  const [userId, setUserId] = useState<string>("");
+  const [userLat, setUserLat] = useState<number>(0);
+  const [userLon, setUserLon] = useState<number>(0);
+  const [insuranceProvider, setInsuranceProvider] = useState<string | undefined>();
+  const [patientProfile, setPatientProfile] = useState<Record<string, unknown> | undefined>();
+
+  const totalQuestions = questions.length;
   const currentAnswerText = answers[currentQuestion] ?? "";
   const isLastQuestion = currentQuestion === totalQuestions - 1;
+
+  // ── Load user context on mount ────────────────────────────────────────────
+  useEffect(() => {
+    (async () => {
+      // Get user ID
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setUserId(user.id);
+        // Load profile for insurance + patient info
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("insurance_provider, dob, gender, language")
+          .eq("id", user.id)
+          .single();
+        if (profile) {
+          setInsuranceProvider(profile.insurance_provider || undefined);
+          const age = profile.dob
+            ? Math.floor((Date.now() - new Date(profile.dob).getTime()) / 31557600000)
+            : undefined;
+          setPatientProfile({
+            ...(age ? { age } : {}),
+            ...(profile.gender ? { gender: profile.gender } : {}),
+          });
+        }
+      }
+
+      // Get location
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === "granted") {
+        const loc = await Location.getCurrentPositionAsync({});
+        setUserLat(loc.coords.latitude);
+        setUserLon(loc.coords.longitude);
+      }
+    })();
+  }, []);
 
   // ── Processing animation ───────────────────────────────────────────────────
   useEffect(() => {
     if (flowStep !== "processing") { setProcessStep(0); return; }
-    const t1 = setTimeout(() => setProcessStep(1), 900);
-    const t2 = setTimeout(() => setProcessStep(2), 2000);
+    const t1 = setTimeout(() => setProcessStep(1), 1200);
+    const t2 = setTimeout(() => setProcessStep(2), 3000);
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [flowStep]);
 
   // ── Flow ──────────────────────────────────────────────────────────────────
-  const submitSymptoms = () => {
+  const handleSubmitSymptoms = async () => {
     if (!symptoms.trim()) return;
-    setAnswers(new Array(GENERIC_QUESTIONS.length).fill(""));
-    setCurrentQuestion(0);
-    setFlowStep("questions");
+    setError(null);
+    setFlowStep("loading-questions");
+
+    try {
+      const res = await apiSubmitSymptoms({
+        user_id: userId,
+        symptom_input: symptoms,
+        patient_profile: patientProfile as any,
+      });
+
+      const q = res.questions;
+      if (!q || q.length === 0) {
+        setError("No follow-up questions received. Please try again.");
+        setFlowStep("symptom-input");
+        return;
+      }
+
+      setQuestions(q);
+      setAnswers(new Array(q.length).fill(""));
+      setCurrentQuestion(0);
+      setFlowStep("questions");
+    } catch (e: any) {
+      console.error("submitSymptoms error:", e);
+      setError("Could not reach AI agent. Please check your connection and try again.");
+      setFlowStep("symptom-input");
+    }
   };
 
   const updateAnswer = (text: string) => {
@@ -242,19 +228,50 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
   const runDiagnosis = async () => {
     setFlowStep("processing");
     setProcessStep(0);
-    // Brief pause so the animation plays through
-    await new Promise((r) => setTimeout(r, 3000));
-    const triage = localTriage(symptoms, answers);
-    setResult({ ...triage, severityLevel: esiToSeverity(triage.esiLevel) });
-    setFlowStep("results");
+    setError(null);
+
+    try {
+      const res = await apiSubmitTriage({
+        user_id: userId,
+        symptom_input: symptoms,
+        questions,
+        answers,
+        patient_profile: patientProfile as any,
+        user_latitude: userLat,
+        user_longitude: userLon,
+        insurance_provider: insuranceProvider,
+      });
+
+      setTriageResponse(res);
+
+      const triage = res.triage;
+      const call911 = triage.flags?.call_911 || triage.call_911 || false;
+
+      setResult({
+        esiLevel: triage.esi_level,
+        identifiedDepartment: triage.identified_department,
+        urgencySummary: triage.urgency_summary,
+        call911,
+        severityLevel: esiToSeverity(triage.esi_level),
+        recommendedCareType: triage.recommended_care_type,
+      });
+      setFlowStep("results");
+    } catch (e: any) {
+      console.error("submitTriage error:", e);
+      setError("Triage failed. Please try again.");
+      setFlowStep("questions");
+    }
   };
 
   const resetFlow = () => {
     setFlowStep("symptom-input");
     setSymptoms("");
-    setAnswers(new Array(GENERIC_QUESTIONS.length).fill(""));
+    setQuestions([]);
+    setAnswers([]);
     setCurrentQuestion(0);
     setResult(null);
+    setTriageResponse(null);
+    setError(null);
   };
 
   const toggleSymptomChip = (chip: string) => {
@@ -267,6 +284,18 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
     });
   };
 
+  const viewHospitals = () => {
+    if (!triageResponse) return;
+    router.push({
+      pathname: "/results",
+      params: {
+        triageData: JSON.stringify(triageResponse),
+        insuranceProvider: insuranceProvider || "",
+        userId,
+      },
+    });
+  };
+
   // ─────────────────────────────────────────────────────────────────────────
 
   return (
@@ -274,7 +303,6 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
 
       {/* ── Header ── */}
       <View style={styles.headerBar}>
-        {/* Left: back arrow on questions + results; spacer on input/processing */}
         {(flowStep === "questions" || flowStep === "results") ? (
           <TouchableOpacity
             onPress={flowStep === "results" ? resetFlow : goPrevQuestion}
@@ -288,14 +316,14 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
         )}
 
         <Text style={styles.headerTitle}>
-          {flowStep === "results"     ? "Your Assessment"
-           : flowStep === "processing" ? "Analysing…"
-           : flowStep === "questions"  ? `Question ${currentQuestion + 1} of ${totalQuestions}`
+          {flowStep === "results"          ? "Your Assessment"
+           : flowStep === "processing"     ? "Analysing…"
+           : flowStep === "loading-questions" ? "Preparing…"
+           : flowStep === "questions"      ? `Question ${currentQuestion + 1} of ${totalQuestions}`
            : "Symptom Checker"}
         </Text>
 
-        {/* Right: close on input/questions; restart on results; hidden on processing */}
-        {flowStep === "processing" ? (
+        {(flowStep === "processing" || flowStep === "loading-questions") ? (
           <View style={{ width: 32 }} />
         ) : (
           <TouchableOpacity
@@ -311,6 +339,17 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
           </TouchableOpacity>
         )}
       </View>
+
+      {/* ── Error banner ── */}
+      {error && (
+        <View style={styles.errorBanner}>
+          <MaterialIcons name="error-outline" size={15} color={RED_URGENT} />
+          <Text style={styles.errorBannerText}>{error}</Text>
+          <TouchableOpacity onPress={() => setError(null)}>
+            <MaterialIcons name="close" size={16} color={TEXT_MUTED} />
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* ── RESULTS ── */}
       {flowStep === "results" && result && (
@@ -350,6 +389,16 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
             <Text style={styles.bodyText}>{result.urgencySummary}</Text>
           </View>
 
+          {/* Care type badge */}
+          {result.recommendedCareType && (
+            <View style={styles.careTypePill}>
+              <MaterialIcons name="medical-services" size={14} color={PURPLE} />
+              <Text style={styles.careTypePillText}>
+                Recommended: {result.recommendedCareType.replace(/_/g, " ")}
+              </Text>
+            </View>
+          )}
+
           {/* Emergency CTA */}
           <TouchableOpacity
             style={[styles.emergencyBtn, result.call911 && styles.emergencyBtnUrgent]}
@@ -362,14 +411,29 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
             </Text>
           </TouchableOpacity>
 
-          {/* Find nearby care */}
+          {/* View recommended hospitals */}
+          {triageResponse && triageResponse.recommended_hospitals.length > 0 && (
+            <TouchableOpacity
+              style={styles.hospitalBtn}
+              activeOpacity={0.85}
+              onPress={viewHospitals}
+            >
+              <MaterialIcons name="local-hospital" size={18} color="#fff" />
+              <Text style={styles.hospitalBtnText}>
+                View {triageResponse.recommended_hospitals.length} Recommended Hospitals
+              </Text>
+              <MaterialIcons name="chevron-right" size={20} color="#fff" />
+            </TouchableOpacity>
+          )}
+
+          {/* Find nearby care (fallback) */}
           <TouchableOpacity
             style={styles.nearbyBtn}
             activeOpacity={0.85}
             onPress={() => { onClose(); router.replace("/(tabs)"); }}
           >
-            <MaterialIcons name="local-hospital" size={18} color={PURPLE} />
-            <Text style={styles.nearbyBtnText}>Find Nearby Care</Text>
+            <MaterialIcons name="explore" size={18} color={PURPLE} />
+            <Text style={styles.nearbyBtnText}>Browse Nearby Facilities</Text>
             <MaterialIcons name="chevron-right" size={20} color={PURPLE} />
           </TouchableOpacity>
 
@@ -383,7 +447,7 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
         </ScrollView>
       )}
 
-      {/* ── SYMPTOM INPUT / QUESTIONS / PROCESSING ── */}
+      {/* ── NON-RESULTS STEPS ── */}
       {flowStep !== "results" && (
         <KeyboardAvoidingView
           style={{ flex: 1 }}
@@ -444,7 +508,7 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
 
               <TouchableOpacity
                 style={[styles.primaryBtn, !symptoms.trim() && styles.primaryBtnDisabled]}
-                onPress={submitSymptoms}
+                onPress={handleSubmitSymptoms}
                 disabled={!symptoms.trim()}
                 activeOpacity={0.85}
               >
@@ -456,8 +520,21 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
             </ScrollView>
           )}
 
+          {/* ── LOADING QUESTIONS ── */}
+          {flowStep === "loading-questions" && (
+            <View style={styles.processingContainer}>
+              <View style={styles.processingSpinner}>
+                <ActivityIndicator size="large" color={PURPLE} />
+              </View>
+              <Text style={styles.processingTitle}>Generating follow-up questions…</Text>
+              <Text style={styles.processingSubtitle}>
+                Our AI agent is analysing your symptoms to ask the right questions.
+              </Text>
+            </View>
+          )}
+
           {/* ── QUESTIONS ── */}
-          {flowStep === "questions" && (
+          {flowStep === "questions" && questions.length > 0 && (
             <ScrollView
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.scrollPad}
@@ -474,11 +551,11 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
                 <Text style={styles.contextPillText} numberOfLines={1}>{symptoms}</Text>
               </View>
 
-              <Text style={styles.questionText}>{GENERIC_QUESTIONS[currentQuestion]}</Text>
+              <Text style={styles.questionText}>{questions[currentQuestion]}</Text>
 
               {/* Quick-answer chips */}
               {(() => {
-                const chips = getQuickAnswers(GENERIC_QUESTIONS[currentQuestion]);
+                const chips = getQuickAnswers(questions[currentQuestion]);
                 if (!chips.length) return null;
                 return (
                   <View style={styles.quickAnswerRow}>
@@ -502,7 +579,7 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
                 <TextInput
                   style={styles.answerTextInput}
                   placeholder={
-                    getQuickAnswers(GENERIC_QUESTIONS[currentQuestion]).length > 0
+                    getQuickAnswers(questions[currentQuestion]).length > 0
                       ? "Or describe in your own words…"
                       : "Type your answer here…"
                   }
@@ -510,7 +587,7 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
                   multiline
                   value={currentAnswerText}
                   onChangeText={updateAnswer}
-                  autoFocus={getQuickAnswers(GENERIC_QUESTIONS[currentQuestion]).length === 0}
+                  autoFocus={getQuickAnswers(questions[currentQuestion]).length === 0}
                 />
               </View>
 
@@ -543,7 +620,7 @@ export function DiagnoseContent({ onClose, initialSymptom = "" }: DiagnoseConten
               </View>
               <Text style={styles.processingTitle}>Analysing your symptoms…</Text>
               <Text style={styles.processingSubtitle}>
-                Reviewing your responses and preparing a personalised assessment.
+                AI agents are scoring urgency and finding the best hospitals near you.
               </Text>
               <View style={styles.card}>
                 {PROCESSING_STEPS.map((step, i) => {
@@ -609,6 +686,14 @@ const styles = StyleSheet.create({
   },
 
   divider: { height: 1, backgroundColor: BORDER },
+
+  // Error banner
+  errorBanner: {
+    flexDirection: "row", alignItems: "center", backgroundColor: RED_DIM,
+    paddingHorizontal: 16, paddingVertical: 10, gap: 8,
+    borderBottomWidth: 1, borderBottomColor: "rgba(239,68,68,0.25)",
+  },
+  errorBannerText: { color: RED_URGENT, fontSize: 12, fontWeight: "600", flex: 1, lineHeight: 17 },
 
   // Emergency banner
   emergencyBanner: {
@@ -732,12 +817,26 @@ const styles = StyleSheet.create({
 
   bodyText: { fontSize: 14, color: TEXT_SECONDARY, lineHeight: 22, paddingVertical: 16 },
 
+  careTypePill: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    backgroundColor: PURPLE_DIM, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10,
+    marginBottom: 16, borderWidth: 1, borderColor: "rgba(124,58,237,0.25)",
+  },
+  careTypePillText: { color: PURPLE, fontSize: 13, fontWeight: "600", textTransform: "capitalize" },
+
   emergencyBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center",
     gap: 8, backgroundColor: RED_URGENT, marginBottom: 10, borderRadius: 16, height: 54,
   },
   emergencyBtnUrgent: { backgroundColor: "#DC2626", borderWidth: 2, borderColor: "#FCA5A5" },
   emergencyBtnText: { color: "#fff", fontSize: 14, fontWeight: "700" },
+
+  hospitalBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center",
+    gap: 10, backgroundColor: PURPLE, borderRadius: 16, height: 54,
+    marginBottom: 10,
+  },
+  hospitalBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
 
   nearbyBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center",
