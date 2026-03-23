@@ -8,11 +8,14 @@ load_dotenv()
 
 ASI1_API_KEY = os.getenv("ASI1_API_KEY")
 
+from agents.config import FOLLOWUP_AGENT_SEED
+
 followup_agent = Agent(
     name="followup_agent",
-    seed="careroute_followup_agent_seed",
+    seed=FOLLOWUP_AGENT_SEED,
     port=8005,
-    endpoint=["http://localhost:8005/submit"]
+    mailbox=True,
+    publish_agent_details=True,
 )
 
 from agents.models import FollowUpCareRequest, FollowUpCareResponse
