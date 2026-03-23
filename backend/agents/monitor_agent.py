@@ -10,11 +10,14 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+from agents.config import MONITOR_AGENT_SEED
+
 monitor_agent = Agent(
     name="monitor_agent",
-    seed="careroute_monitor_agent_seed",
+    seed=MONITOR_AGENT_SEED,
     port=8003,
-    endpoint=["http://localhost:8003/submit"]
+    mailbox=True,
+    publish_agent_details=True,
 )
 
 from agents.models import ForceCapacityRefresh, CapacityRefreshComplete
@@ -95,3 +98,6 @@ async def handle_force_refresh(ctx: Context, sender: str, msg: ForceCapacityRefr
 
 
 monitor_agent.include(monitor_protocol, publish_manifest=True)
+
+if __name__ == "__main__":
+    monitor_agent.run()

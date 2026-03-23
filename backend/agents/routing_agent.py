@@ -11,11 +11,14 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+from agents.config import ROUTING_AGENT_SEED
+
 routing_agent = Agent(
     name="routing_agent",
-    seed="careroute_routing_agent_seed",
+    seed=ROUTING_AGENT_SEED,
     port=8002,
-    endpoint=["http://localhost:8002/submit"]
+    mailbox=True,
+    publish_agent_details=True,
 )
 
 from agents.models import RoutingRequest, GatewayTriageResponse
@@ -233,3 +236,6 @@ async def handle_routing_request(ctx: Context, sender: str, msg: RoutingRequest)
 
 
 routing_agent.include(routing_protocol, publish_manifest=True)
+
+if __name__ == "__main__":
+    routing_agent.run()

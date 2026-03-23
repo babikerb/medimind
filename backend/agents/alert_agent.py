@@ -9,11 +9,14 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+from agents.config import ALERT_AGENT_SEED
+
 alert_agent = Agent(
     name="alert_agent",
-    seed="careroute_alert_agent_seed",
+    seed=ALERT_AGENT_SEED,
     port=8004,
-    endpoint=["http://localhost:8004/submit"]
+    mailbox=True,
+    publish_agent_details=True,
 )
 
 from agents.models import AlertRequest, AlertNotification
@@ -93,3 +96,6 @@ async def check_for_changes(ctx: Context):
 
 
 alert_agent.include(alert_protocol, publish_manifest=True)
+
+if __name__ == "__main__":
+    alert_agent.run()

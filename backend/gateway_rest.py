@@ -14,8 +14,9 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Bureau runs on port 8000. REST endpoints are served on the SAME port.
-BUREAU_BASE = "http://localhost:8000"
+# Each agent runs on its own port with Agentverse mailbox
+SYMPTOM_AGENT_BASE = "http://localhost:8001"
+ROUTING_AGENT_BASE = "http://localhost:8002"
 
 app = FastAPI(title="CareRoute Gateway (REST Fallback)")
 
@@ -47,7 +48,7 @@ class FollowUpAnswersPayload(BaseModel):
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "mode": "rest_fallback", "bureau": BUREAU_BASE}
+    return {"status": "ok", "mode": "rest_fallback"}
 
 
 @app.post("/symptoms")
@@ -56,7 +57,7 @@ async def submit_symptoms(payload: SymptomInputRequest):
     async with httpx.AsyncClient(timeout=30) as client:
         try:
             resp = await client.post(
-                f"{BUREAU_BASE}/rest/symptom/questions",
+                f"{SYMPTOM_AGENT_BASE}/rest/symptom/questions",
                 json={
                     "user_id": payload.user_id,
                     "symptom_input": payload.symptom_input,
@@ -78,7 +79,7 @@ async def submit_triage(payload: FollowUpAnswersPayload):
         try:
             # Step 1 Triage via SymptomAgent REST
             triage_resp = await client.post(
-                f"{BUREAU_BASE}/rest/symptom/triage",
+                f"{SYMPTOM_AGENT_BASE}/rest/symptom/triage",
                 json={
                     "user_id": payload.user_id,
                     "symptom_input": payload.symptom_input,
@@ -93,7 +94,7 @@ async def submit_triage(payload: FollowUpAnswersPayload):
 
             # Step 2 Routing via RoutingAgent REST
             routing_resp = await client.post(
-                f"{BUREAU_BASE}/rest/routing/rank",
+                f"{ROUTING_AGENT_BASE}/rest/routing/rank",
                 json={
                     "user_id": payload.user_id,
                     "triage_result": triage,

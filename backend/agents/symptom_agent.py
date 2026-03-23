@@ -8,11 +8,14 @@ load_dotenv()
 
 ASI1_API_KEY = os.getenv("ASI1_API_KEY")
 
+from agents.config import SYMPTOM_AGENT_SEED
+
 symptom_agent = Agent(
     name="symptom_agent",
-    seed="careroute_symptom_agent_seed",
+    seed=SYMPTOM_AGENT_SEED,
     port=8001,
-    endpoint=["http://localhost:8001/submit"]
+    mailbox=True,
+    publish_agent_details=True,
 )
 
 from agents.models import (

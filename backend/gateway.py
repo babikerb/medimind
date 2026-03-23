@@ -4,37 +4,26 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Union
-from uagents.query import query
-from uagents.resolver import RulesBasedResolver
-from uagents.envelope import Envelope
-from uagents.types import MsgStatus
+from uagents.query import send_sync_message
+from uagents_core.envelope import Envelope
+from uagents_core.types import MsgStatus
 from supabase import create_client
 from dotenv import load_dotenv
 
 load_dotenv()
 
-SYMPTOM_AGENT_ADDRESS = os.getenv("SYMPTOM_AGENT_ADDRESS")
-ROUTING_AGENT_ADDRESS = os.getenv("ROUTING_AGENT_ADDRESS")
-MONITOR_AGENT_ADDRESS = os.getenv("MONITOR_AGENT_ADDRESS")
-ALERT_AGENT_ADDRESS   = os.getenv("ALERT_AGENT_ADDRESS")
-FOLLOWUP_AGENT_ADDRESS = os.getenv("FOLLOWUP_AGENT_ADDRESS")
+# Agent addresses are now derived from seed phrases via Agentverse Identity
+from agents.config import (
+    SYMPTOM_AGENT_ADDRESS,
+    ROUTING_AGENT_ADDRESS,
+    MONITOR_AGENT_ADDRESS,
+    ALERT_AGENT_ADDRESS,
+    FOLLOWUP_AGENT_ADDRESS,
+)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# All agents route through Bureau's single port
-# Bureau runs ONE ASGI server on port 8000. Individual agent ports are overwritten
-# The Bureau routes messages internally by agent address, not by port
-BUREAU_ENDPOINT = "http://localhost:8000/submit"
-
-local_resolver = RulesBasedResolver({
-    SYMPTOM_AGENT_ADDRESS: BUREAU_ENDPOINT,
-    ROUTING_AGENT_ADDRESS: BUREAU_ENDPOINT,
-    MONITOR_AGENT_ADDRESS: BUREAU_ENDPOINT,
-    ALERT_AGENT_ADDRESS:   BUREAU_ENDPOINT,
-    FOLLOWUP_AGENT_ADDRESS: BUREAU_ENDPOINT,
-})
 
 # Import models
 from agents.models import (
@@ -54,17 +43,14 @@ def is_capacity_ready() -> bool:
     except Exception:
         return False
 
-# Send a message to an agent inside the Bureau via query()
-# query() creates a temporary agent identity, sends the message as an envelope
-# to the resolved endpoint, and waits for the response envelope
-# The agent's on_message handler calls ctx.send(sender, response) which sends
-# the reply back. query() intercepts this reply and returns it as an Envelope
+# Send a message to an agent on Agentverse via send_sync_message()
+# Resolves the destination through the Almanac (Agentverse registry)
+# and waits for the response
 async def send_and_receive(address: str, message) -> dict:
 
-    response: Union[MsgStatus, Envelope] = await query(
+    response = await send_sync_message(
         destination=address,
         message=message,
-        resolver=local_resolver,
         timeout=30
     )
 
@@ -79,6 +65,10 @@ async def send_and_receive(address: str, message) -> dict:
         if not payload_str:
             raise HTTPException(status_code=500, detail="Agent returned empty payload")
         return json.loads(payload_str)
+
+    # send_sync_message can return a Model directly
+    if hasattr(response, 'model_dump'):
+        return response.model_dump()
 
     raise HTTPException(status_code=500, detail=f"Unexpected response type: {type(response)}")
 
@@ -130,17 +120,18 @@ def health_check():
     return {
         "status": "ok",
         "capacity_ready": is_capacity_ready(),
-        "bureau_endpoint": BUREAU_ENDPOINT,
+        "mode": "agentverse",
         "agents": {
             "symptom_agent": SYMPTOM_AGENT_ADDRESS,
             "routing_agent": ROUTING_AGENT_ADDRESS,
             "monitor_agent": MONITOR_AGENT_ADDRESS,
             "alert_agent":   ALERT_AGENT_ADDRESS,
+            "followup_agent": FOLLOWUP_AGENT_ADDRESS,
         }
     }
 
 
-# Sends symptoms to SymptomAgent inside Bureau, returns 1-5 follow-up questions
+# Sends symptoms to SymptomAgent on Agentverse, returns 1-5 follow-up questions
 @app.post("/symptoms")
 async def submit_symptoms(payload: SymptomInputRequest):
 
