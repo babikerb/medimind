@@ -152,7 +152,7 @@ def score_hospital(
 
 # Main handler
 
-@routing_protocol.on_message(model=RoutingRequest, replies={GatewayTriageResponse}, allow_unverified=True)
+@routing_protocol.on_query(model=RoutingRequest, replies={GatewayTriageResponse})
 async def handle_routing_request(ctx: Context, sender: str, msg: RoutingRequest):
     triage = msg.triage_result
 
