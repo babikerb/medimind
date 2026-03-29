@@ -34,7 +34,6 @@ from agents.models import (
     GatewayTriageRequest,
     GatewayTriageResponse,
     RoutingRequest,
-    RoutingResponse,
     AlertNotification,
     FollowUpCareResponse,
 )
@@ -200,7 +199,7 @@ async def submit_triage(payload: FollowUpAnswersPayload):
                 user_longitude=payload.user_longitude,
                 insurance_provider=payload.insurance_provider
             ),
-            response_type=RoutingResponse
+            response_type=GatewayTriageResponse
         )
 
         return {

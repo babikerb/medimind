@@ -20,7 +20,7 @@ import {
   View,
 } from "react-native";
 import { supabase } from "../../supabase";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import { MapView, Marker, PROVIDER_GOOGLE } from "../../components/MapViewWrapper";
 import { DiagnoseContent } from "../diagnose";
 
 const { width, height } = Dimensions.get("window");
