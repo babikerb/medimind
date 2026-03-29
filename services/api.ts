@@ -62,6 +62,8 @@ export interface RecommendedHospital {
   accepted_insurances: string[];
   score: number;
   distance_miles: number;
+  drive_time_minutes: number;
+  encoded_polyline?: string;
   available_beds: number;
   total_beds: number;
   estimated_wait_minutes: number;
@@ -207,7 +209,11 @@ export function generateReasonString(
   }
 
   parts.push(`${hospital.available_beds} beds available`);
-  parts.push(`${hospital.distance_miles} mi away`);
+  if (hospital.drive_time_minutes) {
+    parts.push(`${hospital.drive_time_minutes} min drive`);
+  } else {
+    parts.push(`${hospital.distance_miles} mi away`);
+  }
 
   if (
     insuranceProvider &&

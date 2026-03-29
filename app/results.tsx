@@ -203,15 +203,22 @@ export default function ResultsScreen() {
   const flatListRef = useRef<FlatList>(null);
 
   // Fetch driving route when selection or location changes
+  // Prefer backend-provided Google polyline, fall back to OSRM
   useEffect(() => {
     if (!userLocation || !selectedHospital) return;
     let cancelled = false;
-    fetchDrivingRoute(userLocation, {
-      latitude: selectedHospital.latitude,
-      longitude: selectedHospital.longitude,
-    }).then((coords) => {
+
+    if (selectedHospital.encoded_polyline) {
+      const coords = decodePolyline(selectedHospital.encoded_polyline);
       if (!cancelled) setRouteCoords(coords);
-    });
+    } else {
+      fetchDrivingRoute(userLocation, {
+        latitude: selectedHospital.latitude,
+        longitude: selectedHospital.longitude,
+      }).then((coords) => {
+        if (!cancelled) setRouteCoords(coords);
+      });
+    }
     return () => { cancelled = true; };
   }, [selectedIdx, userLocation, selectedHospital]);
 
@@ -385,9 +392,9 @@ export default function ResultsScreen() {
             <Text style={s.metricUnit}>min</Text>
           </View>
           <View style={s.metricPill}>
-            <MaterialIcons name="directions" size={14} color={BLUE} />
-            <Text style={s.metricValue}>{item.distance_miles}</Text>
-            <Text style={s.metricUnit}>mi</Text>
+            <MaterialIcons name="drive-eta" size={14} color={BLUE} />
+            <Text style={s.metricValue}>{item.drive_time_minutes || Math.round(item.distance_miles / 30 * 60)}</Text>
+            <Text style={s.metricUnit}>min drive</Text>
           </View>
           <View style={s.metricPill}>
             <MaterialIcons name="star" size={14} color={PURPLE} />

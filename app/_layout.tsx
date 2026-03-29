@@ -3,6 +3,7 @@ import {
   DefaultTheme,
   ThemeProvider,
 } from "@react-navigation/native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
@@ -23,10 +24,15 @@ export default function RootLayout() {
   const segments = useSegments();
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    Promise.all([
+      supabase.auth.getSession(),
+      AsyncStorage.getItem("onboarding_complete"),
+    ]).then(([{ data: { session } }, onboarding]) => {
       setSession(session);
+      setOnboardingDone(onboarding === "true");
       setLoading(false);
     });
 
@@ -43,14 +49,15 @@ export default function RootLayout() {
     if (loading) return;
 
     const inAuthGroup = segments[0] === "(auth)";
-    const inTabsGroup = segments[0] === "(tabs)";
 
-    if (session && inAuthGroup) {
+    if (!onboardingDone && segments[1] !== "onboarding") {
+      router.replace("/(auth)/onboarding");
+    } else if (session && inAuthGroup) {
       router.replace("/(tabs)");
     } else if (!session && !inAuthGroup) {
       router.replace("/(auth)/welcome");
     }
-  }, [session, segments, loading]);
+  }, [session, segments, loading, onboardingDone]);
 
   if (loading) {
     return (
