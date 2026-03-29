@@ -13,6 +13,9 @@ alert:
 followup:
 	python -m agents.followup_agent
 
+hhs:
+	python -m agents.hhs_agent
+
 gateway:
 	uvicorn gateway:app --host 0.0.0.0 --port 8080 --reload
 
@@ -23,4 +26,5 @@ all-agents:
 	python -m agents.monitor_agent &
 	python -m agents.alert_agent &
 	python -m agents.followup_agent &
+	python -m agents.hhs_agent &
 	@echo "All agents started. Run 'make gateway' in another terminal."

@@ -63,9 +63,11 @@ export interface RecommendedHospital {
   score: number;
   distance_miles: number;
   available_beds: number;
+  total_beds: number;
   estimated_wait_minutes: number;
   department_match: boolean;
   capacity_source: string;
+  last_updated: string | null;
 }
 
 export interface TriageResponse {

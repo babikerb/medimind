@@ -85,6 +85,22 @@ async function fetchDrivingRoute(
   return [origin, dest];
 }
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+function formatLastUpdated(isoString: string): string {
+  const date = new Date(isoString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffMins < 1) return "just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
+}
+
 // ─── Design tokens ───────────────────────────────────────────────────────────
 const APP_BG = "#0F172A";
 const SURFACE = "#1E293B";
@@ -291,7 +307,7 @@ export default function ResultsScreen() {
   // ── Score breakdown ────────────────────────────────────────────────────────
   const getScoreBreakdown = (h: RecommendedHospital) => {
     const deptScore = h.department_match ? 100 : 20;
-    const bedScore = Math.min(100, (h.available_beds / 50) * 100);
+    const bedScore = Math.min(100, (h.available_beds / Math.max(h.total_beds, 1)) * 100);
     const availability = deptScore * 0.6 + bedScore * 0.4;
     const maxWait = esiLevel <= 2 ? 30 : esiLevel === 3 ? 90 : 180;
     const waitScore = Math.max(0, 100 - (h.estimated_wait_minutes / maxWait) * 100);
@@ -382,7 +398,7 @@ export default function ResultsScreen() {
 
         {/* Bed gauge */}
         <View style={{ marginTop: 10 }}>
-          <BedGauge beds={item.available_beds} />
+          <BedGauge beds={item.available_beds} total={item.total_beds} />
         </View>
 
         {/* Department + insurance match */}
@@ -397,13 +413,24 @@ export default function ResultsScreen() {
               {triage?.identified_department}
             </Text>
           </View>
-          <View style={[s.tag, { borderColor: TEXT_MUTED }]}>
-            <MaterialIcons name="info-outline" size={11} color={TEXT_MUTED} />
-            <Text style={[s.tagText, { color: TEXT_MUTED }]}>
-              {item.capacity_source === "monitor_agent" ? "Live data" : "Estimated"}
+          <View style={[s.tag, { borderColor: item.capacity_source === "hhs" ? GREEN : TEXT_MUTED }]}>
+            <MaterialIcons
+              name={item.capacity_source === "hhs" ? "verified" : "info-outline"}
+              size={11}
+              color={item.capacity_source === "hhs" ? GREEN : TEXT_MUTED}
+            />
+            <Text style={[s.tagText, { color: item.capacity_source === "hhs" ? GREEN : TEXT_MUTED }]}>
+              {item.capacity_source === "hhs" ? "HHS Verified" : item.capacity_source === "monitor_agent" ? "Live data" : "Estimated"}
             </Text>
           </View>
         </View>
+
+        {/* Last updated */}
+        {item.last_updated && (
+          <Text style={s.lastUpdated}>
+            Updated {formatLastUpdated(item.last_updated)}
+          </Text>
+        )}
       </TouchableOpacity>
     );
   };
@@ -845,6 +872,12 @@ const s = StyleSheet.create({
   tagText: {
     fontSize: 10,
     fontWeight: "600",
+  },
+  lastUpdated: {
+    fontSize: 10,
+    color: "#64748B",
+    marginTop: 6,
+    textAlign: "right",
   },
 
   // Page dots

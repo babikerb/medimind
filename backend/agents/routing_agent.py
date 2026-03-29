@@ -55,10 +55,35 @@ def simulate_capacity(hospital: dict) -> dict:
         "occupancy_rate": occupancy
     }
 
-# Always tries to read the latest MonitorAgent snapshot from Supabase first
-# Falls back to simulation only if no snapshot exists yet
+# Reads the latest capacity snapshot from Supabase
+# Priority: HHS data (real) > Monitor Agent (simulated) > inline fallback
 def get_capacity(hospital: dict, department: str) -> dict:
     try:
+        # Try HHS data first (real reported data)
+        hhs_snapshot = (
+            supabase.table("hospital_capacity_snapshots")
+            .select("*")
+            .eq("hospital_id", hospital["id"])
+            .eq("department", department)
+            .eq("source", "hhs")
+            .order("snapshot_time", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if hhs_snapshot.data:
+            row = hhs_snapshot.data[0]
+            available_beds = row["available_beds"]
+            wait_minutes = row["estimated_wait_minutes"]
+            occupancy = 1 - (available_beds / max(hospital["total_beds"], 1))
+            return {
+                "available_beds": available_beds,
+                "estimated_wait_minutes": wait_minutes,
+                "occupancy_rate": occupancy,
+                "source": "hhs",
+                "last_updated": row.get("snapshot_time")
+            }
+
+        # Fall back to any snapshot (monitor agent)
         snapshot = (
             supabase.table("hospital_capacity_snapshots")
             .select("*")
@@ -77,14 +102,16 @@ def get_capacity(hospital: dict, department: str) -> dict:
                 "available_beds": available_beds,
                 "estimated_wait_minutes": wait_minutes,
                 "occupancy_rate": occupancy,
-                "source": "monitor_agent"   # ← useful for debugging / judging
+                "source": row.get("source", "monitor_agent"),
+                "last_updated": row.get("snapshot_time")
             }
     except Exception:
         pass
 
-    # True fallback — log it so we know monitor agent data was missing
+    # True fallback — log it so we know no snapshot data was available
     sim = simulate_capacity(hospital)
     sim["source"] = "simulated_fallback"
+    sim["last_updated"] = None
     return sim
 
 
@@ -146,7 +173,8 @@ def score_hospital(
         "available_beds": available_beds,
         "estimated_wait_minutes": wait_minutes,
         "department_match": department in hospital.get("departments", []),
-        "capacity_source": capacity["source"]   # monitor_agent or simulated_fallback
+        "capacity_source": capacity["source"],
+        "last_updated": capacity.get("last_updated")
     }
 
 
@@ -196,7 +224,9 @@ async def handle_routing_request(ctx: Context, sender: str, msg: RoutingRequest)
                 "available_beds": item["metrics"]["available_beds"],
                 "estimated_wait_minutes": item["metrics"]["estimated_wait_minutes"],
                 "department_match": item["metrics"]["department_match"],
-                "capacity_source": item["metrics"]["capacity_source"]
+                "total_beds": item["hospital"]["total_beds"],
+                "capacity_source": item["metrics"]["capacity_source"],
+                "last_updated": item["metrics"].get("last_updated")
             }
             for item in scored[:3]
         ]

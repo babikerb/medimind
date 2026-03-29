@@ -21,6 +21,7 @@ from agents.config import (
     MONITOR_AGENT_ADDRESS,
     ALERT_AGENT_ADDRESS,
     FOLLOWUP_AGENT_ADDRESS,
+    HHS_AGENT_ADDRESS,
 )
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -48,6 +49,7 @@ local_resolver = RulesBasedResolver({
     MONITOR_AGENT_ADDRESS: ["http://localhost:8003/submit"],
     ALERT_AGENT_ADDRESS: ["http://localhost:8004/submit"],
     FOLLOWUP_AGENT_ADDRESS: ["http://localhost:8005/submit"],
+    HHS_AGENT_ADDRESS: ["http://localhost:8006/submit"],
 })
 
 # Helpers
@@ -143,6 +145,7 @@ def health_check():
             "monitor_agent": MONITOR_AGENT_ADDRESS,
             "alert_agent":   ALERT_AGENT_ADDRESS,
             "followup_agent": FOLLOWUP_AGENT_ADDRESS,
+            "hhs_agent": HHS_AGENT_ADDRESS,
         }
     }
 
