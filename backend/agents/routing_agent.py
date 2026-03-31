@@ -1,6 +1,7 @@
 import os
 import math
 import random
+import requests
 from uagents import Agent, Context, Protocol
 from supabase import create_client
 from dotenv import load_dotenv
@@ -25,8 +26,40 @@ from agents.models import RoutingRequest, GatewayTriageResponse
 
 routing_protocol = Protocol("RoutingProtocol")
 
+GOOGLE_DIRECTIONS_API_KEY = os.getenv("GOOGLE_DIRECTIONS_API_KEY", "")
+
 
 # Scoring helpers
+
+def get_drive_time(origin_lat, origin_lon, dest_lat, dest_lon) -> dict:
+    """Get traffic-aware drive time from Google Directions API."""
+    if not GOOGLE_DIRECTIONS_API_KEY:
+        return None
+    try:
+        resp = requests.get(
+            "https://maps.googleapis.com/maps/api/directions/json",
+            params={
+                "origin": f"{origin_lat},{origin_lon}",
+                "destination": f"{dest_lat},{dest_lon}",
+                "departure_time": "now",
+                "key": GOOGLE_DIRECTIONS_API_KEY,
+            },
+            timeout=5,
+        )
+        data = resp.json()
+        if data.get("status") == "OK" and data.get("routes"):
+            leg = data["routes"][0]["legs"][0]
+            # Prefer duration_in_traffic if available
+            duration = leg.get("duration_in_traffic", leg["duration"])
+            return {
+                "drive_time_minutes": round(duration["value"] / 60),
+                "distance_miles": round(leg["distance"]["value"] / 1609.34, 1),
+                "encoded_polyline": data["routes"][0]["overview_polyline"]["points"],
+            }
+    except Exception:
+        pass
+    return None
+
 
 def haversine_distance(lat1, lon1, lat2, lon2) -> float:
     R = 3958.8
@@ -55,10 +88,35 @@ def simulate_capacity(hospital: dict) -> dict:
         "occupancy_rate": occupancy
     }
 
-# Always tries to read the latest MonitorAgent snapshot from Supabase first
-# Falls back to simulation only if no snapshot exists yet
+# Reads the latest capacity snapshot from Supabase
+# Priority: HHS data (real) > Monitor Agent (simulated) > inline fallback
 def get_capacity(hospital: dict, department: str) -> dict:
     try:
+        # Try HHS data first (real reported data)
+        hhs_snapshot = (
+            supabase.table("hospital_capacity_snapshots")
+            .select("*")
+            .eq("hospital_id", hospital["id"])
+            .eq("department", department)
+            .eq("source", "hhs")
+            .order("snapshot_time", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if hhs_snapshot.data:
+            row = hhs_snapshot.data[0]
+            available_beds = row["available_beds"]
+            wait_minutes = row["estimated_wait_minutes"]
+            occupancy = 1 - (available_beds / max(hospital["total_beds"], 1))
+            return {
+                "available_beds": available_beds,
+                "estimated_wait_minutes": wait_minutes,
+                "occupancy_rate": occupancy,
+                "source": "hhs",
+                "last_updated": row.get("snapshot_time")
+            }
+
+        # Fall back to any snapshot (monitor agent)
         snapshot = (
             supabase.table("hospital_capacity_snapshots")
             .select("*")
@@ -77,14 +135,16 @@ def get_capacity(hospital: dict, department: str) -> dict:
                 "available_beds": available_beds,
                 "estimated_wait_minutes": wait_minutes,
                 "occupancy_rate": occupancy,
-                "source": "monitor_agent"   # ← useful for debugging / judging
+                "source": row.get("source", "monitor_agent"),
+                "last_updated": row.get("snapshot_time")
             }
     except Exception:
         pass
 
-    # True fallback — log it so we know monitor agent data was missing
+    # True fallback — log it so we know no snapshot data was available
     sim = simulate_capacity(hospital)
     sim["source"] = "simulated_fallback"
+    sim["last_updated"] = None
     return sim
 
 
@@ -111,10 +171,21 @@ def score_hospital(
     max_wait = 30 if esi_level <= 2 else (90 if esi_level == 3 else 180)
     wait_score = max(0, 100 - (wait_minutes / max_wait * 100))
 
-    # Distance ESI 1 gets double distance weight
-    # Closest capable hospital wins
+    # Distance & drive time
     distance = haversine_distance(user_lat, user_lon, hospital["latitude"], hospital["longitude"])
-    distance_score = max(0, 100 - (distance * 5))
+
+    # Try Google Directions for traffic-aware drive time
+    drive_info = get_drive_time(user_lat, user_lon, hospital["latitude"], hospital["longitude"])
+    if drive_info:
+        drive_time_minutes = drive_info["drive_time_minutes"]
+        distance = drive_info["distance_miles"]
+        encoded_polyline = drive_info["encoded_polyline"]
+        # Score by drive time: 60 min drive = 0 score
+        distance_score = max(0, 100 - (drive_time_minutes / 60 * 100))
+    else:
+        drive_time_minutes = round(distance / 30 * 60)  # estimate ~30mph avg
+        encoded_polyline = None
+        distance_score = max(0, 100 - (distance * 5))
 
     # Insurance EMTALA: ESI 1/2 must be treated regardless of insurance
     if esi_level <= 2:
@@ -143,10 +214,13 @@ def score_hospital(
     return {
         "score": round(final_score, 2),
         "distance_miles": round(distance, 1),
+        "drive_time_minutes": drive_time_minutes,
+        "encoded_polyline": encoded_polyline,
         "available_beds": available_beds,
         "estimated_wait_minutes": wait_minutes,
         "department_match": department in hospital.get("departments", []),
-        "capacity_source": capacity["source"]   # monitor_agent or simulated_fallback
+        "capacity_source": capacity["source"],
+        "last_updated": capacity.get("last_updated")
     }
 
 
@@ -193,10 +267,14 @@ async def handle_routing_request(ctx: Context, sender: str, msg: RoutingRequest)
                 "accepted_insurances": item["hospital"]["accepted_insurances"],
                 "score": item["metrics"]["score"],
                 "distance_miles": item["metrics"]["distance_miles"],
+                "drive_time_minutes": item["metrics"]["drive_time_minutes"],
+                "encoded_polyline": item["metrics"].get("encoded_polyline"),
                 "available_beds": item["metrics"]["available_beds"],
                 "estimated_wait_minutes": item["metrics"]["estimated_wait_minutes"],
                 "department_match": item["metrics"]["department_match"],
-                "capacity_source": item["metrics"]["capacity_source"]
+                "total_beds": item["hospital"]["total_beds"],
+                "capacity_source": item["metrics"]["capacity_source"],
+                "last_updated": item["metrics"].get("last_updated")
             }
             for item in scored[:3]
         ]

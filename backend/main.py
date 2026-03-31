@@ -7,6 +7,7 @@
 #   make monitor
 #   make alert
 #   make followup
+#   make hhs
 #
 # To run the gateway:
 #   make gateway

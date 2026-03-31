@@ -3,6 +3,7 @@ import {
   DefaultTheme,
   ThemeProvider,
 } from "@react-navigation/native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
@@ -23,10 +24,15 @@ export default function RootLayout() {
   const segments = useSegments();
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    Promise.all([
+      supabase.auth.getSession(),
+      AsyncStorage.getItem("onboarding_complete"),
+    ]).then(([{ data: { session } }, onboarding]) => {
       setSession(session);
+      setOnboardingDone(onboarding === "true");
       setLoading(false);
     });
 
@@ -40,17 +46,26 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    if (loading) return;
+    if (loading || onboardingDone === null) return;
 
     const inAuthGroup = segments[0] === "(auth)";
-    const inTabsGroup = segments[0] === "(tabs)";
+    const onOnboarding = inAuthGroup && segments[1] === "onboarding";
 
-    if (session && inAuthGroup) {
-      router.replace("/(tabs)");
-    } else if (!session && !inAuthGroup) {
-      router.replace("/(auth)/welcome");
+    if (!onboardingDone && !onOnboarding) {
+      router.replace("/(auth)/onboarding");
+      return;
     }
-  }, [session, segments, loading]);
+
+    if (onboardingDone && session && inAuthGroup) {
+      router.replace("/(tabs)");
+      return;
+    }
+
+    if (onboardingDone && !session && !inAuthGroup) {
+      router.replace("/(auth)/welcome");
+      return;
+    }
+  }, [session, loading, onboardingDone]);
 
   if (loading) {
     return (
@@ -76,6 +91,8 @@ export default function RootLayout() {
         <Stack.Screen name="diagnose" />
         <Stack.Screen name="results" />
         <Stack.Screen name="care-plan" />
+        <Stack.Screen name="insurance-scan" />
+        <Stack.Screen name="admin-dashboard" />
         <Stack.Screen name="modal" options={{ presentation: "modal" }} />
       </Stack>
     </ThemeProvider>

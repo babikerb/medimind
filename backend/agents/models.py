@@ -87,6 +87,14 @@ class FollowUpCareResponse(Model):
     user_id: str
     care_plan: dict
 
+# HHS Agent
+
+class HHSRefreshRequest(Model):
+    requester: str
+
+class HHSRefreshComplete(Model):
+    snapshots_written: int
+
 # Gateway Agent bridge models
 # These are the models used for query() based communication
 # on_query handlers use these to receive requests and send responses

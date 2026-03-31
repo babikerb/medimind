@@ -59,7 +59,8 @@ async def run_capacity_update(ctx: Context) -> int:
                 "hospital_id": hospital["id"],
                 "department": dept,
                 "available_beds": available_beds,
-                "estimated_wait_minutes": wait
+                "estimated_wait_minutes": wait,
+                "source": "monitor_agent"
             })
 
     # Insert in batches of 50 to stay within Supabase limits

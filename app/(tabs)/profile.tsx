@@ -451,6 +451,31 @@ export default function ProfileScreen() {
         <InfoCard label="Plan" value={profile?.insurance_plan ?? ""} iconName="description" />
       </View>
 
+      <SectionHeader title="QUICK ACTIONS" />
+      <View style={styles.card}>
+        <TouchableOpacity style={styles.infoCard} onPress={() => router.push("/insurance-scan" as any)} activeOpacity={0.7}>
+          <View style={styles.iconWrapper}>
+            <MaterialIcons name="credit-card" size={18} color="#3B82F6" />
+          </View>
+          <View style={styles.infoCardText}>
+            <Text style={styles.infoLabel}>Insurance Scanner</Text>
+            <Text style={styles.infoValue}>Scan your insurance card</Text>
+          </View>
+          <MaterialIcons name="chevron-right" size={18} color="#64748B" />
+        </TouchableOpacity>
+        <View style={styles.divider} />
+        <TouchableOpacity style={styles.infoCard} onPress={() => router.push("/admin-dashboard" as any)} activeOpacity={0.7}>
+          <View style={styles.iconWrapper}>
+            <MaterialIcons name="dashboard" size={18} color="#7C3AED" />
+          </View>
+          <View style={styles.infoCardText}>
+            <Text style={styles.infoLabel}>Admin Dashboard</Text>
+            <Text style={styles.infoValue}>View all hospital capacity</Text>
+          </View>
+          <MaterialIcons name="chevron-right" size={18} color="#64748B" />
+        </TouchableOpacity>
+      </View>
+
       <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
         <MaterialIcons name="logout" size={18} color="#F87171" style={{ marginRight: 8 }} />
         <Text style={styles.logoutButtonText}>Log Out</Text>

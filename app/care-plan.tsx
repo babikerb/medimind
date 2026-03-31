@@ -15,7 +15,9 @@ import {
   getFollowUpCare,
   subscribeAlert,
   getAlertStatus,
+  predictWaitTime,
   AlertStatusResponse,
+  WaitTimePrediction,
 } from "../services/api";
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -55,6 +57,9 @@ export default function CarePlanScreen() {
   const [alertStatus, setAlertStatus] = useState<AlertStatusResponse | null>(null);
   const [alertLoading, setAlertLoading] = useState(false);
 
+  // Wait time prediction state
+  const [prediction, setPrediction] = useState<WaitTimePrediction | null>(null);
+
   const triage = JSON.parse(params.triageData || "{}");
 
   // ── Load care plan ──────────────────────────────────────────────────────────
@@ -75,6 +80,19 @@ export default function CarePlanScreen() {
       }
     })();
   }, []);
+
+  // ── Load wait time predictions ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!params.hospitalId || !params.department) return;
+    (async () => {
+      try {
+        const pred = await predictWaitTime(params.hospitalId, params.department);
+        setPrediction(pred);
+      } catch (e) {
+        console.log("Wait prediction not available:", e);
+      }
+    })();
+  }, [params.hospitalId, params.department]);
 
   // ── Poll alert status ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -226,6 +244,77 @@ export default function CarePlanScreen() {
             )}
           </View>
 
+          {/* Wait Time Prediction */}
+          {prediction && (
+            <View style={s.predictionCard}>
+              <View style={s.predictionHeader}>
+                <MaterialIcons name="trending-up" size={18} color={BLUE} />
+                <Text style={s.predictionTitle}>Wait Time Forecast</Text>
+                <View style={[s.confidenceBadge, {
+                  backgroundColor: prediction.confidence === "high" ? "rgba(16,185,129,0.15)" :
+                    prediction.confidence === "medium" ? "rgba(245,158,11,0.15)" : "rgba(100,116,139,0.15)",
+                }]}>
+                  <Text style={[s.confidenceText, {
+                    color: prediction.confidence === "high" ? GREEN :
+                      prediction.confidence === "medium" ? AMBER : TEXT_MUTED,
+                  }]}>{prediction.confidence} confidence</Text>
+                </View>
+              </View>
+
+              <View style={s.predictionRow}>
+                <View style={s.predictionItem}>
+                  <Text style={s.predictionLabel}>Now</Text>
+                  <Text style={[s.predictionValue, { color: TEXT_PRIMARY }]}>{prediction.current_wait}</Text>
+                  <Text style={s.predictionUnit}>min</Text>
+                </View>
+                <View style={s.predictionArrow}>
+                  <MaterialIcons
+                    name={prediction.trend === "increasing" ? "arrow-upward" : prediction.trend === "decreasing" ? "arrow-downward" : "remove"}
+                    size={16}
+                    color={prediction.trend === "increasing" ? RED_URGENT : prediction.trend === "decreasing" ? GREEN : TEXT_MUTED}
+                  />
+                </View>
+                <View style={s.predictionItem}>
+                  <Text style={s.predictionLabel}>30 min</Text>
+                  <Text style={[s.predictionValue, {
+                    color: prediction.predicted_30min > prediction.current_wait ? RED_URGENT :
+                      prediction.predicted_30min < prediction.current_wait ? GREEN : TEXT_PRIMARY,
+                  }]}>{prediction.predicted_30min}</Text>
+                  <Text style={s.predictionUnit}>min</Text>
+                </View>
+                <View style={s.predictionItem}>
+                  <Text style={s.predictionLabel}>1 hr</Text>
+                  <Text style={[s.predictionValue, {
+                    color: prediction.predicted_1hr > prediction.current_wait ? RED_URGENT :
+                      prediction.predicted_1hr < prediction.current_wait ? GREEN : TEXT_PRIMARY,
+                  }]}>{prediction.predicted_1hr}</Text>
+                  <Text style={s.predictionUnit}>min</Text>
+                </View>
+                <View style={s.predictionItem}>
+                  <Text style={s.predictionLabel}>2 hr</Text>
+                  <Text style={[s.predictionValue, {
+                    color: prediction.predicted_2hr > prediction.current_wait ? RED_URGENT :
+                      prediction.predicted_2hr < prediction.current_wait ? GREEN : TEXT_PRIMARY,
+                  }]}>{prediction.predicted_2hr}</Text>
+                  <Text style={s.predictionUnit}>min</Text>
+                </View>
+              </View>
+
+              <View style={s.trendStrip}>
+                <MaterialIcons
+                  name={prediction.trend === "increasing" ? "trending-up" : prediction.trend === "decreasing" ? "trending-down" : "trending-flat"}
+                  size={14}
+                  color={prediction.trend === "increasing" ? RED_URGENT : prediction.trend === "decreasing" ? GREEN : TEXT_MUTED}
+                />
+                <Text style={[s.trendText, {
+                  color: prediction.trend === "increasing" ? RED_URGENT : prediction.trend === "decreasing" ? GREEN : TEXT_MUTED,
+                }]}>
+                  Wait times are {prediction.trend} · Based on {prediction.data_points} data points
+                </Text>
+              </View>
+            </View>
+          )}
+
           {/* Timeline */}
           {carePlan.follow_up_timeline && (
             <View style={s.timelineCard}>
@@ -364,6 +453,82 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: "rgba(245,158,11,0.25)",
   },
   alertBtnText: { fontSize: 12, color: AMBER, fontWeight: "600" },
+
+  // Wait time prediction
+  predictionCard: {
+    backgroundColor: SURFACE,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: BORDER,
+    marginBottom: 16,
+  },
+  predictionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 14,
+  },
+  predictionTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: TEXT_PRIMARY,
+    flex: 1,
+  },
+  confidenceBadge: {
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  confidenceText: {
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "capitalize",
+  },
+  predictionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-around",
+    marginBottom: 12,
+  },
+  predictionItem: {
+    alignItems: "center",
+    flex: 1,
+  },
+  predictionLabel: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: TEXT_MUTED,
+    marginBottom: 4,
+  },
+  predictionValue: {
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  predictionUnit: {
+    fontSize: 9,
+    fontWeight: "600",
+    color: TEXT_MUTED,
+    marginTop: 1,
+  },
+  predictionArrow: {
+    width: 24,
+    alignItems: "center",
+  },
+  trendStrip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(15,23,42,0.5)",
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  trendText: {
+    fontSize: 11,
+    fontWeight: "600",
+    flex: 1,
+  },
 
   // Timeline
   timelineCard: {
