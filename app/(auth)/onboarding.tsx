@@ -46,6 +46,27 @@ const SLIDES: Slide[] = [
       "We rank nearby hospitals by real-time bed availability, wait times, drive time in traffic, insurance match, and department fit.",
   },
   {
+    icon: "traffic",
+    iconColor: "#F59E0B",
+    title: "Traffic-Aware ETA",
+    subtitle:
+      "Get real drive times using live traffic data from Google Maps. Know exactly when you'll arrive, not just the distance.",
+  },
+  {
+    icon: "credit-card",
+    iconColor: "#3B82F6",
+    title: "Scan Your Insurance Card",
+    subtitle:
+      "Upload a photo of your insurance card and AI will extract your coverage details and match you to accepted hospitals instantly.",
+  },
+  {
+    icon: "trending-up",
+    iconColor: "#10B981",
+    title: "Predict Wait Times",
+    subtitle:
+      "See where wait times are headed. Our AI analyzes historical data to forecast whether wait times will go up or down.",
+  },
+  {
     icon: "verified",
     iconColor: "#10B981",
     title: "Real Data, Real Time",

@@ -188,6 +188,125 @@ export async function healthCheck(): Promise<{
   return apiFetch("/health");
 }
 
+// ─── Route (road-following directions via backend) ──────────────────────────
+
+export interface RouteResponse {
+  shape: string;
+  duration_sec: number;
+  distance_miles: number;
+}
+
+/** Get a road-following route between two points */
+export async function getRoute(
+  originLat: number,
+  originLon: number,
+  destLat: number,
+  destLon: number
+): Promise<RouteResponse> {
+  return apiFetch<RouteResponse>("/route", {
+    method: "POST",
+    body: JSON.stringify({
+      origin_lat: originLat,
+      origin_lon: originLon,
+      dest_lat: destLat,
+      dest_lon: destLon,
+    }),
+  });
+}
+
+// ─── Insurance verification ─────────────────────────────────────────────────
+
+export interface InsuranceVerifyRequest {
+  user_id: string;
+  image_base64: string;
+}
+
+export interface InsuranceExtracted {
+  provider_name: string | null;
+  member_id: string | null;
+  group_number: string | null;
+  plan_type: string | null;
+  plan_name: string | null;
+  copay_er: string | null;
+  copay_urgent: string | null;
+  effective_date: string | null;
+}
+
+export interface InsuranceVerifyResponse {
+  extracted: InsuranceExtracted;
+  matched_hospitals_count: number;
+  matched_hospitals: { id: string; name: string }[];
+  profile_updated: boolean;
+}
+
+/** Upload insurance card image for AI OCR verification */
+export async function verifyInsurance(
+  req: InsuranceVerifyRequest
+): Promise<InsuranceVerifyResponse> {
+  return apiFetch<InsuranceVerifyResponse>("/insurance/verify", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+// ─── Wait time predictions ──────────────────────────────────────────────────
+
+export interface WaitTimePrediction {
+  current_wait: number;
+  predicted_30min: number;
+  predicted_1hr: number;
+  predicted_2hr: number;
+  trend: "increasing" | "decreasing" | "stable";
+  confidence: "high" | "medium" | "low";
+  data_points: number;
+  history: { time: string; wait_minutes: number; beds: number }[];
+}
+
+/** Get wait time predictions for a hospital/department */
+export async function predictWaitTime(
+  hospitalId: string,
+  department: string
+): Promise<WaitTimePrediction> {
+  return apiFetch<WaitTimePrediction>("/predict-wait", {
+    method: "POST",
+    body: JSON.stringify({ hospital_id: hospitalId, department }),
+  });
+}
+
+// ─── Admin dashboard ────────────────────────────────────────────────────────
+
+export interface AdminHospital {
+  id: string;
+  name: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  total_beds: number;
+  available_beds: number;
+  occupancy_rate: number;
+  avg_wait_minutes: number;
+  departments: {
+    department: string;
+    available_beds: number;
+    estimated_wait_minutes: number;
+    source: string;
+    last_updated: string;
+  }[];
+  accepted_insurances: string[];
+}
+
+export interface AdminCapacityResponse {
+  hospitals: AdminHospital[];
+  total_hospitals: number;
+  total_available_beds: number;
+  avg_occupancy: number;
+}
+
+/** Get admin dashboard capacity data */
+export async function getAdminCapacity(): Promise<AdminCapacityResponse> {
+  return apiFetch<AdminCapacityResponse>("/admin/capacity");
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Generate a reason string explaining why a hospital was recommended */

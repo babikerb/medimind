@@ -46,18 +46,26 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    if (loading) return;
+    if (loading || onboardingDone === null) return;
 
     const inAuthGroup = segments[0] === "(auth)";
+    const onOnboarding = inAuthGroup && segments[1] === "onboarding";
 
-    if (!onboardingDone && segments[1] !== "onboarding") {
+    if (!onboardingDone && !onOnboarding) {
       router.replace("/(auth)/onboarding");
-    } else if (session && inAuthGroup) {
-      router.replace("/(tabs)");
-    } else if (!session && !inAuthGroup) {
-      router.replace("/(auth)/welcome");
+      return;
     }
-  }, [session, segments, loading, onboardingDone]);
+
+    if (onboardingDone && session && inAuthGroup) {
+      router.replace("/(tabs)");
+      return;
+    }
+
+    if (onboardingDone && !session && !inAuthGroup) {
+      router.replace("/(auth)/welcome");
+      return;
+    }
+  }, [session, loading, onboardingDone]);
 
   if (loading) {
     return (
@@ -83,6 +91,8 @@ export default function RootLayout() {
         <Stack.Screen name="diagnose" />
         <Stack.Screen name="results" />
         <Stack.Screen name="care-plan" />
+        <Stack.Screen name="insurance-scan" />
+        <Stack.Screen name="admin-dashboard" />
         <Stack.Screen name="modal" options={{ presentation: "modal" }} />
       </Stack>
     </ThemeProvider>

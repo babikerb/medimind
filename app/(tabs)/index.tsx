@@ -1806,6 +1806,40 @@ export default function HomeScreen() {
           </ScrollView>
         </View>
 
+        {/* ── Quick actions row ── */}
+        <View style={styles.quickActionsRow}>
+          <TouchableOpacity
+            style={styles.quickActionBtn}
+            onPress={() => router.push("/insurance-scan" as any)}
+            activeOpacity={0.85}
+          >
+            <View style={[styles.quickActionIcon, { backgroundColor: "rgba(59,130,246,0.12)" }]}>
+              <MaterialIcons name="credit-card" size={18} color="#3B82F6" />
+            </View>
+            <Text style={styles.quickActionLabel}>Insurance{"\n"}Scan</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.quickActionBtn}
+            onPress={() => router.push("/admin-dashboard" as any)}
+            activeOpacity={0.85}
+          >
+            <View style={[styles.quickActionIcon, { backgroundColor: "rgba(124,58,237,0.12)" }]}>
+              <MaterialIcons name="dashboard" size={18} color={PURPLE} />
+            </View>
+            <Text style={styles.quickActionLabel}>Hospital{"\n"}Dashboard</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.quickActionBtn}
+            onPress={openDiagnose}
+            activeOpacity={0.85}
+          >
+            <View style={[styles.quickActionIcon, { backgroundColor: "rgba(239,68,68,0.12)" }]}>
+              <MaterialIcons name="medical-services" size={18} color={RED_URGENT} />
+            </View>
+            <Text style={styles.quickActionLabel}>Start{"\n"}Diagnosis</Text>
+          </TouchableOpacity>
+        </View>
+
         {/* ── Content area ── */}
         <ScrollView
           style={{ flex: 1 }}
@@ -2147,6 +2181,41 @@ const styles = StyleSheet.create({
   filterBadgeActive: { backgroundColor: "rgba(255,255,255,0.25)" },
   filterBadgeText: { fontSize: 10, color: "#94A3B8", fontWeight: "700" },
   filterBadgeTextActive: { color: "#fff" },
+
+  // Quick actions
+  quickActionsRow: {
+    flexDirection: "row",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: BORDER_COLOR,
+  },
+  quickActionBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: CARD_BG,
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: BORDER_COLOR,
+  },
+  quickActionIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  quickActionLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#94A3B8",
+    lineHeight: 14,
+  },
 
   // Empty state
   emptyText: { textAlign: "center", color: "#64748B", marginTop: 40, fontSize: 14 },

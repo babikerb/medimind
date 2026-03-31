@@ -27,6 +27,7 @@ import {
   RecommendedHospital,
   TriageResponse,
   generateReasonString,
+  getRoute,
 } from "../services/api";
 
 const { width, height } = Dimensions.get("window");
@@ -63,26 +64,39 @@ function decodePolyline(encoded: string): { latitude: number; longitude: number 
   return points;
 }
 
-// ─── OSRM route fetcher ─────────────────────────────────────────────────────
-async function fetchDrivingRoute(
+// ─── Route fetching (via backend → Valhalla, follows real roads) ────────────
+
+/** Decode Valhalla encoded polyline (precision 6) */
+function decodePolyline6(encoded: string): { latitude: number; longitude: number }[] {
+  const points: { latitude: number; longitude: number }[] = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let shift = 0, result = 0, byte: number;
+    do { byte = encoded.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    shift = 0; result = 0;
+    do { byte = encoded.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+    points.push({ latitude: lat / 1e6, longitude: lng / 1e6 });
+  }
+  return points;
+}
+
+/** Fetch road-following route via backend (backend calls Valhalla) */
+async function fetchRoadRoute(
   origin: { latitude: number; longitude: number },
   dest: { latitude: number; longitude: number }
-): Promise<{ latitude: number; longitude: number }[]> {
+): Promise<{ coords: { latitude: number; longitude: number }[]; durationMin?: number; distanceMi?: number }> {
   try {
-    const url =
-      `https://router.project-osrm.org/route/v1/driving/` +
-      `${origin.longitude},${origin.latitude};${dest.longitude},${dest.latitude}` +
-      `?overview=full&geometries=polyline`;
-    const res = await fetch(url);
-    const json = await res.json();
-    if (json.routes?.[0]?.geometry) {
-      return decodePolyline(json.routes[0].geometry);
-    }
+    const data = await getRoute(origin.latitude, origin.longitude, dest.latitude, dest.longitude);
+    const coords = decodePolyline6(data.shape);
+    const durationMin = Math.round(data.duration_sec / 60);
+    console.log(`Route: ${durationMin}min, ${data.distance_miles}mi, ${coords.length} points`);
+    return { coords, durationMin, distanceMi: data.distance_miles };
   } catch (e) {
-    console.warn("OSRM route fetch failed, falling back to straight line", e);
+    console.warn("Backend route failed:", e);
+    return { coords: [origin, dest] };
   }
-  // Fallback: straight line
-  return [origin, dest];
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -202,25 +216,65 @@ export default function ResultsScreen() {
   const mapRef = useRef<any>(null);
   const flatListRef = useRef<FlatList>(null);
 
-  // Fetch driving route when selection or location changes
-  // Prefer backend-provided Google polyline, fall back to OSRM
+  // Track live drive times and cached route coords from Valhalla
+  const [liveDriveTimes, setLiveDriveTimes] = useState<Record<string, number>>({});
+  const [cachedRoutes, setCachedRoutes] = useState<Record<string, { latitude: number; longitude: number }[]>>({});
+
+  // Prefetch real road routes + drive times for all hospitals on load
+  useEffect(() => {
+    if (!userLocation || !recommended_hospitals?.length) return;
+    recommended_hospitals.forEach((h) => {
+      if (h.encoded_polyline) return; // already has Google traffic data
+      fetchRoadRoute(userLocation, {
+        latitude: h.latitude,
+        longitude: h.longitude,
+      }).then((result) => {
+        if (result.durationMin) {
+          setLiveDriveTimes((prev) => ({ ...prev, [h.id]: result.durationMin! }));
+        }
+        if (result.coords.length > 2) {
+          setCachedRoutes((prev) => ({ ...prev, [h.id]: result.coords }));
+        }
+      });
+    });
+  }, [userLocation, recommended_hospitals]);
+
+  // Show route for the selected hospital (use cache if available)
   useEffect(() => {
     if (!userLocation || !selectedHospital) return;
     let cancelled = false;
 
+    // Use backend Google polyline if available
     if (selectedHospital.encoded_polyline) {
       const coords = decodePolyline(selectedHospital.encoded_polyline);
       if (!cancelled) setRouteCoords(coords);
-    } else {
-      fetchDrivingRoute(userLocation, {
-        latitude: selectedHospital.latitude,
-        longitude: selectedHospital.longitude,
-      }).then((coords) => {
-        if (!cancelled) setRouteCoords(coords);
-      });
+      return () => { cancelled = true; };
     }
+
+    // Use cached Valhalla route if already fetched
+    const cached = cachedRoutes[selectedHospital.id];
+    if (cached) {
+      if (!cancelled) setRouteCoords(cached);
+      return () => { cancelled = true; };
+    }
+
+    // Fetch fresh from Valhalla
+    fetchRoadRoute(userLocation, {
+      latitude: selectedHospital.latitude,
+      longitude: selectedHospital.longitude,
+    }).then((result) => {
+      if (!cancelled) {
+        setRouteCoords(result.coords);
+        if (result.durationMin) {
+          setLiveDriveTimes((prev) => ({ ...prev, [selectedHospital.id]: result.durationMin! }));
+        }
+        if (result.coords.length > 2) {
+          setCachedRoutes((prev) => ({ ...prev, [selectedHospital.id]: result.coords }));
+        }
+      }
+    });
     return () => { cancelled = true; };
-  }, [selectedIdx, userLocation, selectedHospital]);
+  }, [selectedIdx, userLocation, selectedHospital, cachedRoutes]);
 
   // Fit map to the route
   useEffect(() => {
@@ -385,23 +439,58 @@ export default function ResultsScreen() {
         </View>
 
         {/* Metrics row */}
-        <View style={s.metricsRow}>
-          <View style={s.metricPill}>
-            <MaterialIcons name="schedule" size={14} color={AMBER} />
-            <Text style={s.metricValue}>{item.estimated_wait_minutes}</Text>
-            <Text style={s.metricUnit}>min</Text>
-          </View>
-          <View style={s.metricPill}>
-            <MaterialIcons name="drive-eta" size={14} color={BLUE} />
-            <Text style={s.metricValue}>{item.drive_time_minutes || Math.round(item.distance_miles / 30 * 60)}</Text>
-            <Text style={s.metricUnit}>min drive</Text>
-          </View>
-          <View style={s.metricPill}>
-            <MaterialIcons name="star" size={14} color={PURPLE} />
-            <Text style={s.metricValue}>{item.score}</Text>
-            <Text style={s.metricUnit}>score</Text>
-          </View>
-        </View>
+        {(() => {
+          const liveTime = liveDriveTimes[item.id];
+          const driveMin = liveTime || item.drive_time_minutes || Math.round(item.distance_miles / 30 * 60);
+          const hasLiveRoute = !!liveTime || !!item.encoded_polyline;
+          return (
+            <>
+              <View style={s.metricsRow}>
+                <View style={s.metricPill}>
+                  <MaterialIcons name="schedule" size={14} color={AMBER} />
+                  <Text style={s.metricValue}>{item.estimated_wait_minutes}</Text>
+                  <Text style={s.metricUnit}>min wait</Text>
+                </View>
+                <View style={s.metricPill}>
+                  <MaterialIcons name="drive-eta" size={14} color={BLUE} />
+                  <Text style={s.metricValue}>{driveMin}</Text>
+                  <Text style={s.metricUnit}>{hasLiveRoute ? "min ETA" : "min est"}</Text>
+                </View>
+                <View style={s.metricPill}>
+                  <MaterialIcons name="star" size={14} color={PURPLE} />
+                  <Text style={s.metricValue}>{item.score}</Text>
+                  <Text style={s.metricUnit}>score</Text>
+                </View>
+              </View>
+            </>
+          );
+        })()}
+
+        {/* Traffic-aware ETA */}
+        {(() => {
+          const liveTime = liveDriveTimes[item.id];
+          const driveMin = liveTime || item.drive_time_minutes || Math.round(item.distance_miles / 30 * 60);
+          const arrivalTime = new Date(Date.now() + driveMin * 60000);
+          const arrivalStr = arrivalTime.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+          const isTrafficAware = !!item.encoded_polyline || !!liveTime;
+          const etaColor = driveMin <= 15 ? GREEN : driveMin <= 30 ? AMBER : RED_URGENT;
+          return (
+            <View style={s.etaStrip}>
+              <MaterialIcons name="navigation" size={13} color={etaColor} />
+              <Text style={[s.etaText, { color: etaColor }]}>
+                Arrive by {arrivalStr}
+              </Text>
+              <Text style={s.etaSeparator}>·</Text>
+              <Text style={s.etaDistance}>{item.distance_miles} mi</Text>
+              {isTrafficAware && (
+                <View style={s.trafficBadge}>
+                  <MaterialIcons name="traffic" size={10} color={BLUE} />
+                  <Text style={s.trafficBadgeText}>Live traffic</Text>
+                </View>
+              )}
+            </View>
+          );
+        })()}
 
         {/* Bed gauge */}
         <View style={{ marginTop: 10 }}>
@@ -474,12 +563,22 @@ export default function ResultsScreen() {
           ))}
 
           {/* Driving route polyline to selected hospital */}
-          {routeCoords.length > 0 && (
-            <Polyline
-              coordinates={routeCoords}
-              strokeColor={PURPLE}
-              strokeWidth={4}
-            />
+          {routeCoords.length > 1 && (
+            <>
+              {/* Route outline for visibility */}
+              <Polyline
+                coordinates={routeCoords}
+                strokeColor="rgba(0,0,0,0.4)"
+                strokeWidth={7}
+              />
+              {/* Main route line */}
+              <Polyline
+                coordinates={routeCoords}
+                strokeColor={PURPLE}
+                strokeWidth={5}
+                lineDashPattern={selectedHospital?.encoded_polyline ? undefined : [0]}
+              />
+            </>
           )}
         </MapView>
       ) : (
@@ -622,6 +721,31 @@ export default function ResultsScreen() {
                     </>
                   );
                 })()}
+              </View>
+            </View>
+
+            {/* Traffic-aware route info */}
+            <Text style={s.sectionLabel}>ROUTE INFORMATION</Text>
+            <View style={s.detailCard}>
+              <View style={s.detailRow}>
+                <MaterialIcons name="drive-eta" size={16} color={BLUE} />
+                <Text style={s.detailText}>
+                  {selectedHospital.drive_time_minutes || Math.round(selectedHospital.distance_miles / 30 * 60)} min drive ({selectedHospital.distance_miles} mi)
+                </Text>
+              </View>
+              <View style={s.divider} />
+              <View style={s.detailRow}>
+                <MaterialIcons name="access-time" size={16} color={AMBER} />
+                <Text style={s.detailText}>
+                  Estimated arrival: {new Date(Date.now() + (selectedHospital.drive_time_minutes || Math.round(selectedHospital.distance_miles / 30 * 60)) * 60000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                </Text>
+              </View>
+              <View style={s.divider} />
+              <View style={s.detailRow}>
+                <MaterialIcons name={selectedHospital.encoded_polyline ? "traffic" : "info-outline"} size={16} color={selectedHospital.encoded_polyline ? GREEN : TEXT_MUTED} />
+                <Text style={[s.detailText, { color: selectedHospital.encoded_polyline ? GREEN : TEXT_MUTED }]}>
+                  {selectedHospital.encoded_polyline ? "Traffic-aware routing via Google Maps" : "Estimated route (no live traffic data)"}
+                </Text>
               </View>
             </View>
 
@@ -885,6 +1009,46 @@ const s = StyleSheet.create({
     color: "#64748B",
     marginTop: 6,
     textAlign: "right",
+  },
+
+  // Traffic-aware ETA
+  etaStrip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    marginTop: 8,
+    backgroundColor: "rgba(15,23,42,0.5)",
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  etaText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  etaSeparator: {
+    fontSize: 10,
+    color: "#64748B",
+  },
+  etaDistance: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#94A3B8",
+  },
+  trafficBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "rgba(59,130,246,0.15)",
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginLeft: "auto",
+  },
+  trafficBadgeText: {
+    fontSize: 9,
+    fontWeight: "700",
+    color: "#3B82F6",
   },
 
   // Page dots
