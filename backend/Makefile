@@ -30,3 +30,8 @@ all-agents:
 	$(PYTHON) -m agents.followup_agent &
 	$(PYTHON) -m agents.hhs_agent &
 	@echo "All agents started. Run 'make gateway' in another terminal."
+
+kill-agents:
+	@echo "Killing all background agent processes..."
+	-lsof -t -i :8001 -i :8002 -i :8003 -i :8004 -i :8005 | xargs kill -9 2>/dev/null || true
+	@echo "All agents stopped."
